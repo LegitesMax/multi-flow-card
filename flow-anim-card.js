@@ -1,11 +1,10 @@
 // flow-network-card.js
-// Elegant network flow card for Home Assistant – no root node.
-// — Static lines; only a small moving dot (with fade in/out near ends).
-// — Square / rounded / circle nodes with neon ring (no blinking).
-// — Auto grid layout or manual positions.
-// — Icons inside nodes (mdi:...), plus extra sensor lines above/below the icon.
-// — Lines start/stop exactly on node borders.
-// No external deps.
+// Flow Network Card for Home Assistant (no root node)
+// • Static lines; only a small moving dot with smooth fade at ends
+// • Square/Rounded/Circle nodes with neon ring (no blinking), icons, extra sensor lines
+// • Auto grid layout OR manual x/y positions
+// • Lines start/stop exactly at node borders
+// • Built-in visual editor (vanilla, no HA form deps)
 
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
@@ -14,6 +13,8 @@ class FlowNetworkCard extends HTMLElement {
       background: "#121418",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       layout: { mode: "auto", columns: 3, gap: 22, padding: 18 },
+      value_precision: 2,
+      dot: { size: 5, glow: true, fade_zone: 0.08 },
       nodes: [
         {
           id: "sensor.grid_power", label: "Netz",
@@ -42,10 +43,12 @@ class FlowNetworkCard extends HTMLElement {
         { from: "sensor.grid_power", to: "sensor.house_power", color: "#8a2be2", width: 2, speed: 0.8 },
         { from: "sensor.pv_power",   to: "sensor.house_power", color: "#7cffcb", width: 2, speed: 0.9 },
         { from: "sensor.battery",    to: "sensor.house_power", color: "#ff6b6b", width: 2, speed: 0.7 }
-      ],
-      value_precision: 2,
-      dot: { size: 5, glow: true, fade_zone: 0.08 } // 8% am Anfang/Ende weiches Ein-/Ausblenden
+      ]
     };
+  }
+
+  static getConfigElement() {
+    return document.createElement("flow-network-card-editor-v2");
   }
 
   setConfig(config) {
@@ -70,7 +73,7 @@ class FlowNetworkCard extends HTMLElement {
       this.wrapper.style.width = "100%";
       this.wrapper.style.height = (this._config.height || 320) + "px";
 
-      // Canvas background (nodes + lines) and foreground (moving dots)
+      // two canvas layers
       this.bg = document.createElement("canvas");
       this.fg = document.createElement("canvas");
       for (const c of [this.bg, this.fg]) {
@@ -82,7 +85,7 @@ class FlowNetworkCard extends HTMLElement {
         c.style.left = "0";
       }
 
-      // Overlay for icons (DOM, crisp & themeable)
+      // DOM layer for icons
       this.iconLayer = document.createElement("div");
       Object.assign(this.iconLayer.style, {
         position: "absolute", inset: "0", pointerEvents: "none"
@@ -114,13 +117,13 @@ class FlowNetworkCard extends HTMLElement {
     if (this._config.height) this.wrapper.style.height = this._config.height + "px";
 
     this._prepare();
-    this._resize(); // also (re)draws background
+    this._resize();
   }
 
   set hass(hass) {
     this._hass = hass;
     if (this._config?.nodes?.length) this._nodeValues = this._config.nodes.map(n => this._readEntity(n.id));
-    if (this._nodes) this._needsBgRedraw = true; // update displayed texts
+    if (this._nodes) this._needsBgRedraw = true;
   }
 
   getCardSize() { return Math.ceil((this._config.height || 320) / 50); }
@@ -142,16 +145,13 @@ class FlowNetworkCard extends HTMLElement {
       x: (typeof n.x === "number") ? this._clamp01(n.x) : null,
       y: (typeof n.y === "number") ? this._clamp01(n.y) : null,
       order: n.order ?? i,
-      // icon
       icon: n.icon || null,
       icon_size: Math.max(14, Number(n.icon_size || Math.round((n.size || 64) * 0.38))),
       icon_color: n.icon_color || "#ffffff",
-      // extra sensor lines
       top_entities: Array.isArray(n.top_entities) ? n.top_entities : [],
       bottom_entities: Array.isArray(n.bottom_entities) ? n.bottom_entities : []
     }));
 
-    // auto grid?
     if ((this._config.layout?.mode || "auto") === "auto") this._applyAutoLayout();
 
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
@@ -205,7 +205,7 @@ class FlowNetworkCard extends HTMLElement {
       const { cols, gap, pad } = this._auto;
       const w = rect.width, h = rect.height;
       const cellW = (w - pad*2 - gap*(cols-1)) / cols;
-      const cellH = cellW; // square
+      const cellH = cellW; // square cells
       const rows = Math.ceil(this._nodes.length / cols);
       const usableH = pad*2 + rows*cellH + (rows-1)*gap;
       const top = Math.max(pad, (h - usableH)/2);
@@ -221,7 +221,6 @@ class FlowNetworkCard extends HTMLElement {
       });
     }
 
-    // reposition icons after we know px coords
     this._positionIcons();
     this._needsBgRedraw = true;
   }
@@ -237,7 +236,6 @@ class FlowNetworkCard extends HTMLElement {
       const len = Math.hypot(dx,dy) || 1;
       return { x: ax + dx/len * r, y: ay + dy/len * r };
     }
-    // square/rounded: AABB intersection along direction
     const hw = from.size/2, hh = from.size/2;
     const sx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
     const sy = dy !== 0 ? hh / Math.abs(dy) : Infinity;
@@ -246,17 +244,17 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   // ---------- icons ----------
-  _ensureIconEl(id, color, size) {
-    let el = this._iconEls.get(id);
+  _ensureIconEl(iconName, color, size) {
+    let el = this._iconEls.get(iconName);
     if (!el) {
       el = document.createElement("ha-icon");
       el.style.position = "absolute";
       el.style.transform = "translate(-50%, -50%)";
       el.style.pointerEvents = "none";
       this.iconLayer.appendChild(el);
-      this._iconEls.set(id, el);
+      this._iconEls.set(iconName, el);
     }
-    el.setAttribute("icon", id);
+    el.setAttribute("icon", iconName);
     el.style.color = color;
     el.style.width = size + "px";
     el.style.height = size + "px";
@@ -270,7 +268,6 @@ class FlowNetworkCard extends HTMLElement {
 
     for (const n of this._nodes) {
       if (!n.icon) continue;
-      if (!this._hass) continue; // ha-icon exists regardless, but color can still be set
       const px = { x: n.x * w, y: n.y * h };
       const el = this._ensureIconEl(n.icon, n.icon_color || "#fff", n.icon_size);
       el.style.left = px.x + "px";
@@ -278,7 +275,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
-  // ---------- drawing (background) ----------
+  // ---------- draw (background) ----------
   _drawBg() {
     const ctx = this.bgCtx;
     const w = this.bg.width  / (window.devicePixelRatio || 1);
@@ -291,10 +288,9 @@ class FlowNetworkCard extends HTMLElement {
       ctx.clearRect(0,0,w,h);
     }
 
-    // pixel positions
     for (const n of this._nodes) n._px = { x: n.x * w, y: n.y * h };
 
-    // lines (static)
+    // static lines
     for (const l of this._links) {
       const a = this._nodeMap.get(l.from);
       const b = this._nodeMap.get(l.to);
@@ -327,7 +323,7 @@ class FlowNetworkCard extends HTMLElement {
   _drawNode(ctx, n) {
     const p = n._px, r = n.size/2;
 
-    // ring with soft glow
+    // neon ring (soft glow, no flicker)
     ctx.save();
     ctx.shadowColor = n.ring;
     ctx.shadowBlur = 18;
@@ -342,7 +338,7 @@ class FlowNetworkCard extends HTMLElement {
     this._fillShape(ctx, n.shape, p.x, p.y, r, n.size);
     ctx.restore();
 
-    // label above
+    // label (top)
     ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
@@ -351,7 +347,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.fillText(n.label, p.x, p.y - r - 8);
     ctx.restore();
 
-    // primary value (centered, below icon visually)
+    // main value (center; slight offset if icon)
     const v = this._hass ? this._readEntity(n.id) : { text: "" };
     ctx.save();
     ctx.textAlign = "center";
@@ -361,7 +357,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.fillText(v.text, p.x, p.y + Math.max(0, (n.icon ? n.icon_size * 0.30 : 0)));
     ctx.restore();
 
-    // extra sensors above icon
+    // extra top sensors
     if (n.top_entities?.length) {
       ctx.save();
       ctx.textAlign = "center";
@@ -378,7 +374,7 @@ class FlowNetworkCard extends HTMLElement {
       ctx.restore();
     }
 
-    // extra sensors unter dem Icon
+    // extra bottom sensors
     if (n.bottom_entities?.length) {
       ctx.save();
       ctx.textAlign = "center";
@@ -416,19 +412,19 @@ class FlowNetworkCard extends HTMLElement {
     ctx.closePath();
   }
 
-  // ---------- drawing (dots only, with fade) ----------
+  // ---------- dot animation ----------
   _drawDots(dtMs) {
     const ctx = this.fgCtx;
     const w = this.fg.width / (window.devicePixelRatio || 1);
     const h = this.fg.height / (window.devicePixelRatio || 1);
     ctx.clearRect(0,0,w,h);
 
-    const fadeZone = Math.max(0.02, this._config.dot.fade_zone || 0.08); // fraction [0..0.3]
+    const fadeZone = Math.max(0.02, this._config.dot.fade_zone || 0.08);
 
     for (const l of this._links) {
       if (!l._pA || !l._pB) continue;
 
-      // advance per-link phase with real time
+      // real-time phase for smoothness
       l._t = ((l._t ?? 0) + (dtMs/1000) * (l.speed || 0.8)) % 1;
       const t = l._t;
 
@@ -436,7 +432,7 @@ class FlowNetworkCard extends HTMLElement {
         ? this._quadPoint(l._pA, l._c, l._pB, t)
         : { x: l._pA.x + (l._pB.x - l._pA.x)*t, y: l._pA.y + (l._pB.y - l._pA.y)*t };
 
-      // smooth fade in/out near ends
+      // smooth fade near ends
       let alpha = 1;
       if (t < fadeZone) alpha = t / fadeZone;
       else if (t > 1 - fadeZone) alpha = (1 - t) / fadeZone;
@@ -461,8 +457,33 @@ class FlowNetworkCard extends HTMLElement {
   // ---------- anim loop ----------
   _animStart() {
     if (this._raf) return;
-    const step = (ts) => {// ------- VISUAL EDITOR v2 (vanilla HTML, no HA components) -------
-// ------- VISUAL EDITOR v2 (vanilla HTML, no HA components) -------
+    const step = (ts) => {
+      this._raf = requestAnimationFrame(step);
+      if (!this._visible) { this._lastTs = ts; return; }
+      const dt = this._lastTs ? (ts - this._lastTs) : 16;
+      this._lastTs = ts;
+
+      if (this._needsBgRedraw) { this._drawBg(); this._needsBgRedraw = false; }
+      this._drawDots(dt);
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+  _animStop(){ if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
+}
+
+// register card
+customElements.define("flow-network-card", FlowNetworkCard);
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "flow-network-card",
+  name: "Flow Network Card (icons + smooth dot)",
+  description: "Static lines, smooth moving dot, neon nodes, auto layout, extra sensors.",
+  preview: true
+});
+
+/* ============================
+   Visual Editor (vanilla v2)
+   ============================ */
 class FlowNetworkCardEditorV2 extends HTMLElement {
   constructor() {
     super();
@@ -471,7 +492,6 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
   }
 
   setConfig(config) {
-    // normalize
     this._config = {
       type: "custom:flow-network-card",
       background: config?.background ?? "transparent",
@@ -486,7 +506,6 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
   }
 
   set hass(hass) { this._hass = hass; }
-
   get value() { return this._config; }
 
   _emitChange() {
@@ -505,8 +524,7 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
       .row3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
       .row2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
       label { display:flex; flex-direction:column; gap:6px; }
-      input, select, textarea { background:#1f2328; color:#e6edf3; border:1px solid #30363d; border-radius:8px; padding:8px 10px; }
-      textarea { min-height:70px; resize:vertical; }
+      input, select { background:#1f2328; color:#e6edf3; border:1px solid #30363d; border-radius:8px; padding:8px 10px; }
       .list { display:flex; flex-direction:column; gap:10px; }
       .item { border:1px dashed rgba(255,255,255,0.15); border-radius:10px; padding:10px; }
       .item > .row { margin-top:8px; }
@@ -534,8 +552,8 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
         </fieldset>
 
         <fieldset>
-          <legend>Auto-Layout / Dot</legend>
-          <div class="row row4">
+          <legend>Auto-Layout & Dot</legend>
+          <div class="row">
             <label> Layout-Modus
               <select data-k="layout.mode">
                 <option value="auto" ${this._config.layout.mode==="auto"?"selected":""}>auto</option>
@@ -574,7 +592,7 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
           <div class="btns">
             <button id="addNode">+ Node</button>
           </div>
-          <div class="muted">Tipp: Bei <b>manual</b> Layout x/y (0..1) setzen. <b>Top/Bottom</b> Sensoren als Komma-Liste.</div>
+          <div class="muted">Bei <b>manual</b> Layout x/y (0..1) setzen. Top/Bottom-Sensoren als Komma-Liste.</div>
         </fieldset>
 
         <fieldset>
@@ -588,7 +606,7 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
       </div>
     `;
 
-    // wire root inputs
+    // root inputs
     this.shadowRoot.querySelectorAll('input[data-k], select[data-k]').forEach(el => {
       el.addEventListener('input', () => {
         const path = el.dataset.k.split('.');
@@ -603,7 +621,7 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
       });
     });
 
-    // render nodes/links lists
+    // lists
     this._renderNodes();
     this._renderLinks();
 
@@ -631,7 +649,7 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
       const el = document.createElement('div');
       el.className = 'item';
       el.innerHTML = `
-        <div class="row row4">
+        <div class="row">
           <label>ID (Entity)<input type="text" data-k="id" value="${n.id ?? ''}"></label>
           <label>Label<input type="text" data-k="label" value="${n.label ?? ''}"></label>
           <label>Shape
@@ -643,22 +661,23 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
           </label>
           <label>Size<input type="number" min="44" max="160" step="1" data-k="size" value="${n.size ?? 70}"></label>
         </div>
-        <div class="row row4">
+        <div class="row">
           <label>Ring-Farbe<input type="text" data-k="ring" value="${n.ring ?? '#23b0ff'}"></label>
           <label>Fill-Farbe<input type="text" data-k="fill" value="${n.fill ?? '#0f1a22'}"></label>
           <label>Ring-Breite<input type="number" min="2" max="8" step="1" data-k="ringWidth" value="${n.ringWidth ?? 3}"></label>
           <label>Text-Farbe<input type="text" data-k="color" value="${n.color ?? ''}"></label>
         </div>
-        <div class="row row4">
+        <div class="row">
           <label>Icon (mdi:... )<input type="text" data-k="icon" value="${n.icon ?? ''}"></label>
           <label>Icon-Größe<input type="number" min="14" max="64" step="1" data-k="icon_size" value="${n.icon_size ?? 26}"></label>
           <label>Icon-Farbe<input type="text" data-k="icon_color" value="${n.icon_color ?? '#ffffff'}"></label>
           <label>Order<input type="number" step="1" data-k="order" value="${n.order ?? i}"></label>
         </div>
-        <div class="row row3">
+        <div class="row">
           <label>x (0..1)<input type="number" step="0.01" min="0" max="1" data-k="x" value="${n.x ?? ''}"></label>
           <label>y (0..1)<input type="number" step="0.01" min="0" max="1" data-k="y" value="${n.y ?? ''}"></label>
           <label>Font Size<input type="number" step="1" min="10" max="24" data-k="fontSize" value="${n.fontSize ?? 13}"></label>
+          <span></span>
         </div>
         <div class="row row2">
           <label>Top-Sensoren (Komma-IDs)
@@ -670,7 +689,6 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
         </div>
         <div class="btns"><button data-act="del">– Entfernen</button></div>
       `;
-      // wire
       el.querySelectorAll('[data-k]').forEach(inp => {
         inp.addEventListener('input', () => {
           const k = inp.dataset.k;
@@ -702,7 +720,7 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
       const el = document.createElement('div');
       el.className = 'item';
       el.innerHTML = `
-        <div class="row row4">
+        <div class="row">
           <label>From<input type="text" data-k="from" value="${l.from ?? ''}"></label>
           <label>To<input type="text" data-k="to" value="${l.to ?? ''}"></label>
           <label>Farbe<input type="text" data-k="color" value="${l.color ?? '#23b0ff'}"></label>
@@ -736,38 +754,3 @@ class FlowNetworkCardEditorV2 extends HTMLElement {
   getCardSize() { return 3; }
 }
 customElements.define("flow-network-card-editor-v2", FlowNetworkCardEditorV2);
-
-// Tell the card to use this editor
-if (customElements.get("flow-network-card")) {
-  const Cls = customElements.get("flow-network-card");
-  Cls.getConfigElement = () => document.createElement("flow-network-card-editor-v2");
-}
-
-customElements.define("flow-network-card-editor-v2", FlowNetworkCardEditorV2);
-
-// Tell the card to use this editor
-if (customElements.get("flow-network-card")) {
-  const Cls = customElements.get("flow-network-card");
-  Cls.getConfigElement = () => document.createElement("flow-network-card-editor-v2");
-}
-
-      this._raf = requestAnimationFrame(step);
-      if (!this._visible) { this._lastTs = ts; return; }
-      const dt = this._lastTs ? (ts - this._lastTs) : 16;
-      this._lastTs = ts;
-
-      if (this._needsBgRedraw) { this._drawBg(); this._needsBgRedraw = false; }
-      this._drawDots(dt);
-    };
-    this._raf = requestAnimationFrame(step);
-  }
-  _animStop(){ if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
-}
-
-customElements.define("flow-network-card", FlowNetworkCard);
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "flow-network-card",
-  name: "Flow Network Card (icons + smooth dot)",
-  description: "Static lines, smooth moving dot, neon nodes, auto layout, extra sensors."
-});
