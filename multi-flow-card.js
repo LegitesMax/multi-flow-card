@@ -1,97 +1,138 @@
+// multi-flow-card.js – Version mit animierter Flow-Richtung, ohne Drag & Drop
+
+import * as d3 from "https://cdn.skypack.dev/d3@7";
+
 class MultiFlowCard extends HTMLElement {
   setConfig(config) {
     this.config = config;
     this.attachShadow({ mode: 'open' });
-
-    const style = `
+    this.shadowRoot.innerHTML = `
       <style>
         :host {
           display: block;
+          height: 500px;
           position: relative;
           font-family: sans-serif;
         }
-        .node {
-          position: absolute;
-          padding: 8px 12px;
-          background: #2c3e50;
-          color: white;
-          border-radius: 8px;
-          text-align: center;
-          min-width: 100px;
-        }
         svg {
-          position: absolute;
           width: 100%;
           height: 100%;
-          z-index: 0;
         }
-        .node-content {
-          z-index: 1;
+        .node circle {
+          stroke: #999;
+          stroke-width: 2px;
+        }
+        .node text {
+          pointer-events: none;
+          font-size: 20px;
+          fill: white;
+        }
+        .link {
+          fill: none;
+          stroke-width: 2px;
+          marker-end: url(#arrow);
+        }
+        .flow {
+          stroke-dasharray: 4,2;
+          animation: flow 1s linear infinite;
+        }
+        @keyframes flow {
+          to {
+            stroke-dashoffset: -6;
+          }
         }
       </style>
+      <svg></svg>
     `;
 
-    const container = document.createElement('div');
-    container.innerHTML = style + `<div class="node-content"></div><svg></svg>`;
-    this.shadowRoot.appendChild(container);
-
-    this.render();
-  }
-
-  render() {
-    const content = this.shadowRoot.querySelector('.node-content');
-    const svg = this.shadowRoot.querySelector('svg');
-    content.innerHTML = '';
-    svg.innerHTML = '';
-
-    const nodes = {};
-    const nodeElements = {};
-
-    // Render nodes
-    this.config.nodes.forEach((n) => {
-      const el = document.createElement('div');
-      el.classList.add('node');
-      el.innerText = n.label || n.id;
-      el.style.left = n.x + 'px';
-      el.style.top = n.y + 'px';
-      content.appendChild(el);
-      nodes[n.id] = n;
-      nodeElements[n.id] = el;
-    });
-
-    // Render connections
-    this.config.connections.forEach((conn) => {
-      const from = nodeElements[conn.from];
-      const to = nodeElements[conn.to];
-      if (!from || !to) return;
-
-      const fromRect = from.getBoundingClientRect();
-      const toRect = to.getBoundingClientRect();
-      const svgRect = svg.getBoundingClientRect();
-
-      const x1 = from.offsetLeft + from.offsetWidth / 2;
-      const y1 = from.offsetTop + from.offsetHeight / 2;
-      const x2 = to.offsetLeft + to.offsetWidth / 2;
-      const y2 = to.offsetTop + to.offsetHeight / 2;
-
-      const path = document.createElementNS("http://www.w3.org/2000/svg", 'line');
-      path.setAttribute('x1', x1);
-      path.setAttribute('y1', y1);
-      path.setAttribute('x2', x2);
-      path.setAttribute('y2', y2);
-      path.setAttribute('stroke', conn.color || 'white');
-      path.setAttribute('stroke-width', '2');
-      svg.appendChild(path);
-    });
+    this.svg = d3.select(this.shadowRoot).select("svg");
   }
 
   set hass(hass) {
     this._hass = hass;
-    // optional: you could use hass.state here to update node styles
+    if (this.config) this.renderGraph();
+  }
+
+  renderGraph() {
+    const nodes = this.config.nodes.map((n, index) => {
+      const entity = this._hass.states[n.entity || ""];
+      const state = entity ? entity.state : null;
+      return {
+        id: n.id,
+        label: n.label,
+        icon: n.icon || "mdi:help-circle",
+        entity_id: n.entity,
+        state: state,
+        x: n.x,
+        y: n.y,
+      };
+    });
+
+    const links = this.config.connections.map((c) => ({
+      source: c.from,
+      target: c.to,
+      color: c.color || "#ccc",
+      flow: c.flow !== false
+    }));
+
+    this.svg.selectAll("*").remove();
+
+    // Arrow marker
+    this.svg.append("defs").append("marker")
+      .attr("id", "arrow")
+      .attr("viewBox", "0 -5 10 10")
+      .attr("refX", 20)
+      .attr("refY", 0)
+      .attr("markerWidth", 6)
+      .attr("markerHeight", 6)
+      .attr("orient", "auto")
+      .append("path")
+      .attr("d", "M0,-5L10,0L0,5")
+      .attr("fill", "#999");
+
+    const g = this.svg.append("g");
+
+    const nodeMap = {};
+    nodes.forEach(n => nodeMap[n.id] = n);
+
+    const link = g.selectAll(".link")
+      .data(links)
+      .enter().append("line")
+      .attr("class", d => d.flow ? "link flow" : "link")
+      .attr("stroke", d => d.color)
+      .attr("x1", d => nodeMap[d.source].x)
+      .attr("y1", d => nodeMap[d.source].y)
+      .attr("x2", d => nodeMap[d.target].x)
+      .attr("y2", d => nodeMap[d.target].y);
+
+    const node = g.selectAll(".node")
+      .data(nodes)
+      .enter().append("g")
+      .attr("class", "node")
+      .attr("transform", d => `translate(${d.x},${d.y})`);
+
+    node.append("circle")
+      .attr("r", 24)
+      .attr("fill", d => d.state === "on" ? "#4caf50" : "#607d8b");
+
+    node.append("text")
+      .attr("dy", 7)
+      .attr("text-anchor", "middle")
+      .text(d => this.getIconChar(d.icon));
+  }
+
+  getIconChar(icon) {
+    const mdi = {
+      'mdi:lightbulb': '\uf335',
+      'mdi:motion-sensor': '\uf21c',
+      'mdi:script': '\uf3b5',
+      'mdi:help-circle': '\uf2d7'
+    };
+    return mdi[icon] || '?';
   }
 
   getCardSize() {
-    return 4;
+    return 5;
   }
 }
 
