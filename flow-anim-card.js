@@ -1,15 +1,12 @@
 // flow-network-card.js
-// Flow Network Card (no root) + Visual Editor V3 (simple)
+// Flow Network Card (no root) + Visual Editor V4 (HA controls)
 // - Static lines; only a small moving dot with smooth fade
 // - Square/Rounded/Circle nodes with neon ring (+icon, extra sensor lines)
-// - Auto grid layout (robust) OR manual x/y
-// - Auto layout ALWAYS overrides x/y (no surprises)
+// - Auto grid layout centered per row; manual x/y optional
 // - Lines start/stop exactly at node border
-// - Very simple visual editor with presets & dropdowns
+// - Labels auto-avoid lines: above/below chosen opposite to average link direction
+// - Visual editor uses Home Assistant pickers (entity, icon, color)
 
-/* ======================
-   THE CARD
-   ====================== */
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
     return {
@@ -34,7 +31,7 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   static getConfigElement() {
-    return document.createElement("flow-network-card-editor-v3");
+    return document.createElement("flow-network-card-editor-v4");
   }
 
   setConfig(config) {
@@ -57,13 +54,10 @@ class FlowNetworkCard extends HTMLElement {
       this.wrapper = document.createElement("div");
       Object.assign(this.wrapper.style, { position: "relative", width: "100%", height: (this._config.height || 320) + "px" });
 
-      // layers
       this.bg = document.createElement("canvas");
       this.fg = document.createElement("canvas");
-      for (const c of [this.bg, this.fg]) {
-        Object.assign(c.style, { display: "block", width: "100%", height: "100%", position: "absolute", inset: "0" });
-      }
-      // icon DOM layer
+      for (const c of [this.bg, this.fg]) Object.assign(c.style, { display: "block", width: "100%", height: "100%", position: "absolute", inset: "0" });
+
       this.iconLayer = document.createElement("div");
       Object.assign(this.iconLayer.style, { position: "absolute", inset: "0", pointerEvents: "none" });
 
@@ -80,7 +74,7 @@ class FlowNetworkCard extends HTMLElement {
       document.addEventListener("visibilitychange", () => this._visible = document.visibilityState === "visible");
 
       this._lastTs = 0;
-      this._iconEls = new Map(); // key by node.id (fix)
+      this._iconEls = new Map(); // key by node.id
       this._animStart();
     }
 
@@ -111,14 +105,14 @@ class FlowNetworkCard extends HTMLElement {
       ringWidth: Math.max(2, Number(n.ringWidth || 3)),
       text_color: n.color || this._config.node_text_color,
       fontSize: Math.max(11, Number(n.fontSize || 13)),
-      // IMPORTANT: auto mode ignores x/y (always recompute)
       x: (this._config.layout?.mode === "manual" && typeof n.x === "number") ? this._clamp01(n.x) : null,
       y: (this._config.layout?.mode === "manual" && typeof n.y === "number") ? this._clamp01(n.y) : null,
       order: n.order ?? i,
       icon: n.icon || null, icon_size: Math.max(14, Number(n.icon_size || Math.round((n.size || 64) * 0.38))),
       icon_color: n.icon_color || "#ffffff",
       top_entities: Array.isArray(n.top_entities) ? n.top_entities : [],
-      bottom_entities: Array.isArray(n.bottom_entities) ? n.bottom_entities : []
+      bottom_entities: Array.isArray(n.bottom_entities) ? n.bottom_entities : [],
+      _labelSide: "top" // computed later
     }));
 
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
@@ -141,21 +135,24 @@ class FlowNetworkCard extends HTMLElement {
     const gap = Math.max(8, Number(cfg.gap || 20));
     const pad = Math.max(8, Number(cfg.padding || 16));
 
-    // square cells sized by available width, also ensure fits height
     const n = this._nodes.length;
     const rows = Math.ceil(n / cols);
+
+    // base cell size from width; fit to height if needed
     const cellW = (pxW - pad*2 - gap*(cols-1)) / cols;
-    const cellH = cellW; // square
+    const cellH = cellW; // squares
     const totalH = pad*2 + rows*cellH + gap*(rows-1);
-    // if height too small, scale down all cells
     const scale = totalH > pxH ? (pxH - pad*2 - gap*(rows-1)) / (rows * cellH) : 1;
     const cw = cellW * scale, ch = cellH * scale;
-    const top = (pxH - (rows*ch + gap*(rows-1))) / 2;
 
-    this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((n, i) => {
-      const r = Math.floor(i / cols);
-      const c = i % cols;
-      const cx = pad + c*(cw+gap) + cw/2;
+    this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((n, idx) => {
+      const r = Math.floor(idx / cols);
+      const leftInRow = Math.min(cols, (this._nodes.length - r*cols)); // items in this row
+      const rowWidth = leftInRow*cw + (leftInRow-1)*gap;
+      const leftOffset = (pxW - rowWidth)/2; // <-- center this row horizontally
+      const c = idx % cols;
+      const cx = leftOffset + c*(cw+gap) + cw/2;
+      const top = (pxH - (rows*ch + (rows-1)*gap))/2;
       const cy = top + r*(ch+gap) + ch/2;
       n.x = this._clamp01(cx / pxW);
       n.y = this._clamp01(cy / pxH);
@@ -188,14 +185,13 @@ class FlowNetworkCard extends HTMLElement {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    // Auto layout: ALWAYS compute fresh positions (ignore any x/y)
     if ((this._config.layout?.mode || "auto") === "auto") {
-      this._applyAutoLayout(rect.width, rect.height);
+      this._applyAutoLayout(rect.width, rect.height);       // centered rows
     } else {
-      // manual: clamp nodes to stay fully inside canvas (no cut off)
+      // manual: keep nodes inside bounds
       for (const n of this._nodes) {
-        const r = (n.size/2) / rect.width;   // normalize by width for x
-        const ry = (n.size/2) / rect.height; // normalize by height for y
+        const r = (n.size/2) / rect.width;
+        const ry = (n.size/2) / rect.height;
         n.x = Math.max(r, Math.min(1 - r, n.x ?? 0.5));
         n.y = Math.max(ry, Math.min(1 - ry, n.y ?? 0.5));
       }
@@ -216,7 +212,6 @@ class FlowNetworkCard extends HTMLElement {
       const len = Math.hypot(dx,dy) || 1;
       return { x: ax + dx/len * r, y: ay + dy/len * r };
     }
-    // square/rounded: intersect with AABB
     const hw = from.size/2, hh = from.size/2;
     const sx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
     const sy = dy !== 0 ? hh / Math.abs(dy) : Infinity;
@@ -251,6 +246,26 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
+  // ---------- label side computation ----------
+  _computeLabelSides() {
+    // sum direction vectors for each node, then set label opposite to avg dy
+    const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, count:0}]));
+    for (const l of this._links) {
+      const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
+      if (!a || !b) continue;
+      const va = { dx: b._px.x - a._px.x, dy: b._px.y - a._px.y };
+      const vb = { dx: a._px.x - b._px.x, dy: a._px.y - b._px.y };
+      const sa = sum.get(a.id); sa.dx += va.dx; sa.dy += va.dy; sa.count++;
+      const sb = sum.get(b.id); sb.dx += vb.dx; sb.dy += vb.dy; sb.count++;
+    }
+    for (const n of this._nodes) {
+      const s = sum.get(n.id);
+      if (!s || s.count === 0) { n._labelSide = "top"; continue; }
+      // if flows go mostly upwards (avg dy < 0), put label BELOW (to avoid line above)
+      n._labelSide = (s.dy < 0) ? "bottom" : "top";
+    }
+  }
+
   // ---------- draw background ----------
   _drawBg() {
     const ctx = this.bgCtx;
@@ -264,7 +279,7 @@ class FlowNetworkCard extends HTMLElement {
 
     for (const n of this._nodes) n._px = { x: n.x * w, y: n.y * h };
 
-    // lines
+    // lines first
     for (const l of this._links) {
       const a = this._nodeMap.get(l.from);
       const b = this._nodeMap.get(l.to);
@@ -289,6 +304,9 @@ class FlowNetworkCard extends HTMLElement {
       l._pA = pA; l._pB = pB; l._c = { x: cx, y: cy }; l._curved = !!l.curve;
     }
 
+    // compute label sides now that positions and links are known
+    this._computeLabelSides();
+
     // nodes
     for (const n of this._nodes) this._drawNode(ctx, n);
   }
@@ -308,15 +326,18 @@ class FlowNetworkCard extends HTMLElement {
     this._fillShape(ctx, n.shape, p.x, p.y, r, n.size);
     ctx.restore();
 
-    // label
+    // label (auto: top or bottom based on flow)
+    const labelAbove = (n._labelSide === "top");
+    const labelY = labelAbove ? (p.y - r - 8) : (p.y + r + 8);
+    const baseline = labelAbove ? "bottom" : "top";
     ctx.save();
-    ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-    ctx.fillStyle = "rgba(255,255,255,0.86)";
+    ctx.textAlign = "center"; ctx.textBaseline = baseline;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.font = `bold ${n.fontSize}px ${this._config.font_family}`;
-    ctx.fillText(n.label, p.x, p.y - r - 8);
+    ctx.fillText(n.label, p.x, labelY);
     ctx.restore();
 
-    // main value
+    // main value (center; slight offset if icon)
     const v = this._hass ? this._readEntity(n.id) : { text: "" };
     ctx.save();
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
@@ -395,21 +416,23 @@ class FlowNetworkCard extends HTMLElement {
   _animStop(){ if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
 }
 
-// register
+// register card
 customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (simple editor)",
-  description: "Static lines, smooth dot, neon nodes, robust auto layout.",
+  name: "Flow Network Card (HA editor)",
+  description: "Static lines, smooth dot, neon nodes; centered auto layout; smart labels.",
   preview: true
 });
 
 /* ======================
-   VISUAL EDITOR V3 (simple)
+   VISUAL EDITOR V4 (HA controls)
    ====================== */
-class FlowNetworkCardEditorV3 extends HTMLElement {
-  constructor(){ super(); this.attachShadow({mode:"open"}); this._config = {}; }
+class FlowNetworkCardEditorV4 extends HTMLElement {
+  constructor(){ super(); this.attachShadow({mode:"open"}); this._config={}; }
+  set hass(h){ this._hass = h; }
+  get value(){ return this._config; }
 
   setConfig(config) {
     this._config = {
@@ -424,193 +447,180 @@ class FlowNetworkCardEditorV3 extends HTMLElement {
     };
     this._render();
   }
-  set hass(h){ this._hass = h; }
-  get value(){ return this._config; }
-  _emit(){ const e=new Event("config-changed",{bubbles:true,composed:true}); e.detail={config:this._config}; this.dispatchEvent(e); }
+
+  _emit(){
+    const e = new Event("config-changed",{bubbles:true,composed:true});
+    e.detail = { config: this._config };
+    this.dispatchEvent(e);
+  }
 
   _render(){
-    const css=`
-      :host{display:block;font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--primary-text-color,#fff)}
-      .wrap{display:grid;gap:14px;padding:8px 8px 16px}
-      fieldset{border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:12px}
-      legend{opacity:.85;padding:0 6px}
-      .row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-      .row3{grid-template-columns:repeat(3,minmax(0,1fr))}
+    const css = `
+      :host{display:block}
+      .wrap{padding:8px 8px 16px; display:grid; gap:14px}
+      ha-expansion-panel{--expansion-panel-summary-padding: 8px 12px}
+      .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
       .row2{grid-template-columns:repeat(2,minmax(0,1fr))}
-      label{display:flex;flex-direction:column;gap:6px}
-      input,select{background:#1f2328;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 10px}
       .list{display:flex;flex-direction:column;gap:10px}
-      .item{border:1px dashed rgba(255,255,255,.15);border-radius:10px;padding:10px}
+      .item{border:1px solid var(--divider-color); border-radius:10px; padding:10px}
       .btns{display:flex;gap:8px;margin-top:10px}
-      button{background:#2d333b;color:#e6edf3;border:1px solid #30363d;padding:6px 10px;border-radius:8px;cursor:pointer}
-      button:hover{filter:brightness(1.1)}
-      .muted{opacity:.75;font-size:12px}
-      .row1{grid-template-columns:1fr}
-      .sp{height:6px}
-      .preset{display:flex;gap:8px;flex-wrap:wrap}
     `;
-    this.shadowRoot.innerHTML=`
+    this.shadowRoot.innerHTML = `
       <style>${css}</style>
       <div class="wrap">
-        <fieldset>
-          <legend>Einfach</legend>
-          <div class="row row3">
-            <label> Hintergrund <input data-k="background" value="${this._config.background}"></label>
-            <label> Höhe (px) <input type="number" min="180" max="1200" step="10" data-k="height" value="${this._config.height}"></label>
-            <label> Nachkommastellen <input type="number" min="0" max="4" step="1" data-k="value_precision" value="${this._config.value_precision}"></label>
+        <ha-expansion-panel>
+          <div slot="header">Allgemein</div>
+          <div class="row">
+            <ha-color-picker label="Hintergrund" value="${this._config.background}" data-k="background"></ha-color-picker>
+            <ha-textfield label="Höhe (px)" type="number" data-k="height" value="${this._config.height}"></ha-textfield>
+            <ha-textfield label="Nachkommastellen" type="number" data-k="value_precision" value="${this._config.value_precision}"></ha-textfield>
           </div>
-          <div class="row row3">
-            <label> Layout
-              <select data-k="layout.mode">
-                <option value="auto" ${this._config.layout.mode==="auto"?"selected":""}>auto (empfohlen)</option>
-                <option value="manual" ${this._config.layout.mode!=="auto"?"selected":""}>manuell (x/y)</option>
-              </select>
-            </label>
-            <label> Spalten <input type="number" min="1" max="8" step="1" data-k="layout.columns" value="${this._config.layout.columns}"></label>
-            <label> Gap <input type="number" min="0" max="80" step="1" data-k="layout.gap" value="${this._config.layout.gap}"></label>
+          <div class="row">
+            <mwc-select label="Layout" data-k="layout.mode">
+              <mwc-list-item value="auto" ?selected=${this._config.layout.mode==="auto"}>auto (empfohlen)</mwc-list-item>
+              <mwc-list-item value="manual" ?selected=${this._config.layout.mode!=="auto"}>manuell (x/y)</mwc-list-item>
+            </mwc-select>
+            <ha-textfield label="Spalten" type="number" data-k="layout.columns" value="${this._config.layout.columns}"></ha-textfield>
+            <ha-textfield label="Gap" type="number" data-k="layout.gap" value="${this._config.layout.gap}"></ha-textfield>
           </div>
-          <div class="row row3">
-            <label> Padding <input type="number" min="0" max="120" step="1" data-k="layout.padding" value="${this._config.layout.padding}"></label>
-            <label> Punkt-Größe <input type="number" min="2" max="12" step="1" data-k="dot.size" value="${this._config.dot.size}"></label>
-            <label> Fade-Zone (0–0.3) <input type="number" min="0" max="0.3" step="0.01" data-k="dot.fade_zone" value="${this._config.dot.fade_zone}"></label>
+          <div class="row">
+            <ha-textfield label="Padding" type="number" data-k="layout.padding" value="${this._config.layout.padding}"></ha-textfield>
+            <ha-textfield label="Punkt-Größe" type="number" data-k="dot.size" value="${this._config.dot.size}"></ha-textfield>
+            <ha-textfield label="Fade-Zone (0–0.3)" type="number" data-k="dot.fade_zone" value="${this._config.dot.fade_zone}"></ha-textfield>
           </div>
-        </fieldset>
+        </ha-expansion-panel>
 
-        <fieldset>
-          <legend>Nodes</legend>
-          <div class="preset">
-            <button id="addPV">+ PV</button>
-            <button id="addNetz">+ Netz</button>
-            <button id="addBatt">+ Batterie</button>
-            <button id="addHome">+ Zuhause</button>
-            <button id="addLeer">+ Leer</button>
-          </div>
+        <ha-expansion-panel opened>
+          <div slot="header">Nodes</div>
           <div class="list" id="nodes"></div>
-        </fieldset>
+          <div class="btns"><mwc-button unelevated id="addNode">+ Node</mwc-button></div>
+        </ha-expansion-panel>
 
-        <fieldset>
-          <legend>Links</legend>
+        <ha-expansion-panel opened>
+          <div slot="header">Links</div>
           <div class="list" id="links"></div>
-          <div class="btns"><button id="addLink">+ Link</button></div>
-          <div class="muted">Auto-Layout ignoriert x/y. Für manuelle Positionen Layout → „manuell“ wählen.</div>
-        </fieldset>
+          <div class="btns"><mwc-button unelevated id="addLink">+ Link</mwc-button></div>
+        </ha-expansion-panel>
       </div>
     `;
 
-    // root inputs
+    // bind basics
     this.shadowRoot.querySelectorAll('[data-k]').forEach(el=>{
-      el.addEventListener('input',()=>{
+      el.addEventListener('value-changed', (ev)=>{
+        const val = ev.detail?.value ?? el.value ?? el.getAttribute('value');
         const path = el.dataset.k.split('.');
         let t=this._config; for(let i=0;i<path.length-1;i++) t=t[path[i]];
-        let v = el.value;
-        if (el.type==='number') v = Number(v);
-        if (el.tagName==='SELECT' && (v==='true'||v==='false')) v = (v==='true');
-        t[path[path.length-1]]=v;
+        t[path[path.length-1]] = (el.type==="number") ? Number(val) : val;
         this._emit();
       });
     });
 
-    // preset buttons
-    const push = (n)=>{ this._config.nodes.push(n); this._renderNodes(); this._emit(); };
-    this.shadowRoot.getElementById('addPV').onclick = ()=>push({ id:"sensor.pv_power",label:"PV",shape:"rounded",size:72,ring:"#7cffcb",fill:"#0f2a22",icon:"mdi:solar-power-variant-outline",icon_size:28,icon_color:"#baffea" });
-    this.shadowRoot.getElementById('addNetz').onclick=()=>push({ id:"sensor.grid_power",label:"Netz",shape:"rounded",size:72,ring:"#8a2be2",fill:"#1c1426",icon:"mdi:transmission-tower",icon_size:28,icon_color:"#caa9ff" });
-    this.shadowRoot.getElementById('addBatt').onclick=()=>push({ id:"sensor.battery",label:"Batterie",shape:"rounded",size:72,ring:"#ff6b6b",fill:"#2a1f22",icon:"mdi:battery-high",icon_size:26,icon_color:"#ffc2c2" });
-    this.shadowRoot.getElementById('addHome').onclick =()=>push({ id:"sensor.house_power",label:"Zuhause",shape:"rounded",size:80,ring:"#23b0ff",fill:"#0f1a22",icon:"mdi:home-variant",icon_size:28,icon_color:"#99dbff" });
-    this.shadowRoot.getElementById('addLeer').onclick =()=>push({ id:"",label:"",shape:"rounded",size:70,ring:"#23b0ff",fill:"#0f1a22",icon:"",icon_size:26,icon_color:"#ffffff" });
-
     // lists
     this._renderNodes();
     this._renderLinks();
-    this.shadowRoot.getElementById('addLink').onclick=()=>{ this._config.links.push({ from:"", to:"", color:"#23b0ff", width:2, speed:0.8, curve:0 }); this._renderLinks(); this._emit(); };
+
+    // add buttons
+    this.shadowRoot.getElementById('addNode').addEventListener('click', ()=>{
+      this._config.nodes.push({ id:"", label:"", shape:"rounded", size:70, ring:"#23b0ff", fill:"#0f1a22", icon:"", icon_size:26, icon_color:"#ffffff" });
+      this._renderNodes(); this._emit();
+    });
+    this.shadowRoot.getElementById('addLink').addEventListener('click', ()=>{
+      this._config.links.push({ from:"", to:"", color:"#23b0ff", width:2, speed:0.8, curve:0 });
+      this._renderLinks(); this._emit();
+    });
   }
 
   _renderNodes(){
     const host = this.shadowRoot.getElementById('nodes');
-    host.innerHTML='';
-    this._config.nodes.forEach((n,i)=>{
-      const el=document.createElement('div'); el.className='item';
-      el.innerHTML=`
-        <div class="row row3">
-          <label>ID (Entity) <input data-k="id" value="${n.id??''}"></label>
-          <label>Label <input data-k="label" value="${n.label??''}"></label>
-          <label>Icon (mdi:...) <input data-k="icon" value="${n.icon??''}"></label>
+    host.innerHTML = '';
+    this._config.nodes.forEach((n, i)=>{
+      const el = document.createElement('div');
+      el.className = 'item';
+      el.innerHTML = `
+        <div class="row">
+          <ha-entity-picker label="Entity (Sensor/Gerät)" .hass=${this._hass} data-k="id" .value=${n.id||""}></ha-entity-picker>
+          <ha-textfield label="Label" data-k="label" value="${n.label||""}"></ha-textfield>
+          <ha-icon-picker label="Icon" .hass=${this._hass} data-k="icon" .value=${n.icon||""}></ha-icon-picker>
         </div>
-        <div class="row row3">
-          <label>Ring-Farbe <input data-k="ring" value="${n.ring??'#23b0ff'}"></label>
-          <label>Fill-Farbe <input data-k="fill" value="${n.fill??'#0f1a22'}"></label>
-          <label>Icon-Farbe <input data-k="icon_color" value="${n.icon_color??'#ffffff'}"></label>
+        <div class="row">
+          <ha-color-picker label="Ring-Farbe" value="${n.ring||'#23b0ff'}" data-k="ring"></ha-color-picker>
+          <ha-color-picker label="Fill-Farbe" value="${n.fill||'#0f1a22'}" data-k="fill"></ha-color-picker>
+          <ha-color-picker label="Icon-Farbe" value="${n.icon_color||'#ffffff'}" data-k="icon_color"></ha-color-picker>
         </div>
-        <div class="row row3">
-          <label>Shape
-            <select data-k="shape">
-              <option value="rounded" ${n.shape==='rounded'?'selected':''}>rounded</option>
-              <option value="square" ${n.shape==='square'?'selected':''}>square</option>
-              <option value="circle" ${n.shape==='circle'?'selected':''}>circle</option>
-            </select>
-          </label>
-          <label>Size <input type="number" min="44" max="160" step="1" data-k="size" value="${n.size??70}"></label>
-          <label>Icon-Größe <input type="number" min="14" max="64" step="1" data-k="icon_size" value="${n.icon_size??26}"></label>
+        <div class="row">
+          <mwc-select label="Shape" data-k="shape">
+            <mwc-list-item value="rounded" ?selected=${(n.shape||'rounded')==='rounded'}>rounded</mwc-list-item>
+            <mwc-list-item value="square"  ?selected=${n.shape==='square'}>square</mwc-list-item>
+            <mwc-list-item value="circle"  ?selected=${n.shape==='circle'}>circle</mwc-list-item>
+          </mwc-select>
+          <ha-textfield label="Size" type="number" data-k="size" value="${n.size??70}"></ha-textfield>
+          <ha-textfield label="Icon-Größe" type="number" data-k="icon_size" value="${n.icon_size??26}"></ha-textfield>
         </div>
-        <details>
-          <summary>Erweitert (Position/Text)</summary>
-          <div class="sp"></div>
-          <div class="row row3">
-            <label>x (0..1) <input type="number" step="0.01" min="0" max="1" data-k="x" value="${n.x??''}"></label>
-            <label>y (0..1) <input type="number" step="0.01" min="0" max="1" data-k="y" value="${n.y??''}"></label>
-            <label>Font Size <input type="number" step="1" min="10" max="24" data-k="fontSize" value="${n.fontSize??13}"></label>
-          </div>
-        </details>
-        <div class="btns"><button data-act="del">– Entfernen</button></div>
+        <ha-formfield label="Erweitert (x/y manuell)">
+          <ha-switch id="adv${i}"></ha-switch>
+        </ha-formfield>
+        <div class="row row2" id="advArea${i}" style="display:none;">
+          <ha-textfield label="x (0..1)" type="number" step="0.01" data-k="x" value="${n.x??""}"></ha-textfield>
+          <ha-textfield label="y (0..1)" type="number" step="0.01" data-k="y" value="${n.y??""}"></ha-textfield>
+        </div>
+        <div class="btns"><mwc-button outlined data-act="del">– Entfernen</mwc-button></div>
       `;
-      el.querySelectorAll('[data-k]').forEach(inp=>{
-        inp.addEventListener('input',()=>{
-          const k=inp.dataset.k;
-          let v=inp.value;
-          if (['size','icon_size','fontSize'].includes(k)) v=Number(v);
+      // wire value-changed for nested controls
+      el.querySelectorAll('[data-k]').forEach(ctrl=>{
+        ctrl.addEventListener('value-changed', (ev)=>{
+          const val = ev.detail?.value ?? ctrl.value ?? ctrl.getAttribute('value');
+          const k = ctrl.dataset.k;
+          let v = val;
+          if (['size','icon_size','fontSize'].includes(k)) v = Number(v);
           if (['x','y'].includes(k)) v = (v===''?null:Math.max(0,Math.min(1,Number(v))));
-          n[k]=v; this._emit();
+          n[k] = v; this._emit();
         });
       });
-      el.querySelector('[data-act="del"]').onclick=()=>{ this._config.nodes.splice(i,1); this._renderNodes(); this._emit(); };
+      el.querySelector(`[data-act="del"]`).addEventListener('click', ()=>{ this._config.nodes.splice(i,1); this._renderNodes(); this._emit(); });
+      const sw = el.querySelector(`#adv${i}`);
+      const area = el.querySelector(`#advArea${i}`);
+      sw.addEventListener('change', ()=> area.style.display = sw.checked ? 'grid' : 'none');
       host.appendChild(el);
     });
   }
 
   _renderLinks(){
-    const host=this.shadowRoot.getElementById('links');
-    host.innerHTML='';
-    const ids=this._config.nodes.map(n=>n.id).filter(Boolean);
-    this._config.links.forEach((l,i)=>{
-      const el=document.createElement('div'); el.className='item';
-      el.innerHTML=`
-        <div class="row row3">
-          <label>From
-            <select data-k="from">${['',...ids].map(id=>`<option value="${id}" ${l.from===id?'selected':''}>${id||'-'}</option>`).join('')}</select>
-          </label>
-          <label>To
-            <select data-k="to">${['',...ids].map(id=>`<option value="${id}" ${l.to===id?'selected':''}>${id||'-'}</option>`).join('')}</select>
-          </label>
-          <label>Farbe <input data-k="color" value="${l.color??'#23b0ff'}"></label>
+    const host = this.shadowRoot.getElementById('links');
+    host.innerHTML = '';
+    const ids = this._config.nodes.map(n=>n.id).filter(Boolean);
+    this._config.links.forEach((l, i)=>{
+      const el = document.createElement('div');
+      el.className = 'item';
+      el.innerHTML = `
+        <div class="row">
+          <mwc-select label="From">
+            ${['',...ids].map(id=>`<mwc-list-item value="${id}" ${l.from===id?'selected':''}>${id||'-'}</mwc-list-item>`).join('')}
+          </mwc-select>
+          <mwc-select label="To">
+            ${['',...ids].map(id=>`<mwc-list-item value="${id}" ${l.to===id?'selected':''}>${id||'-'}</mwc-list-item>`).join('')}
+          </mwc-select>
+          <ha-color-picker label="Farbe" value="${l.color||'#23b0ff'}"></ha-color-picker>
         </div>
-        <div class="row row3">
-          <label>Breite <input type="number" min="1" max="6" step="1" data-k="width" value="${l.width??2}"></label>
-          <label>Speed <input type="number" min="0.05" max="3" step="0.05" data-k="speed" value="${l.speed??0.8}"></label>
-          <label>Kurve (-0.35..0.35) <input type="number" min="-0.35" max="0.35" step="0.01" data-k="curve" value="${l.curve??0}"></label>
+        <div class="row">
+          <ha-textfield label="Breite" type="number" value="${l.width??2}"></ha-textfield>
+          <ha-textfield label="Speed" type="number" value="${l.speed??0.8}"></ha-textfield>
+          <ha-textfield label="Kurve (-0.35..0.35)" type="number" value="${l.curve??0}"></ha-textfield>
         </div>
-        <div class="btns"><button data-act="del">– Entfernen</button></div>
+        <div class="btns"><mwc-button outlined data-act="del">– Entfernen</mwc-button></div>
       `;
-      el.querySelectorAll('[data-k]').forEach(inp=>{
-        inp.addEventListener('input',()=>{
-          const k=inp.dataset.k; let v=inp.value;
-          if (['width','speed','curve'].includes(k)) v=Number(v);
-          l[k]=v; this._emit();
-        });
-      });
-      el.querySelector('[data-act="del"]').onclick=()=>{ this._config.links.splice(i,1); this._renderLinks(); this._emit(); };
+      const selects = el.querySelectorAll('mwc-select');
+      selects[0].addEventListener('selected', (e)=>{ l.from = e.target.value; this._emit(); });
+      selects[1].addEventListener('selected', (e)=>{ l.to   = e.target.value; this._emit(); });
+      el.querySelector('ha-color-picker').addEventListener('value-changed', (e)=>{ l.color = e.detail.value; this._emit(); });
+      const nums = el.querySelectorAll('ha-textfield');
+      nums[0].addEventListener('value-changed', (e)=>{ l.width = Number(e.detail.value); this._emit(); });
+      nums[1].addEventListener('value-changed', (e)=>{ l.speed = Number(e.detail.value); this._emit(); });
+      nums[2].addEventListener('value-changed', (e)=>{ l.curve = Number(e.detail.value); this._emit(); });
+      el.querySelector('[data-act="del"]').addEventListener('click', ()=>{ this._config.links.splice(i,1); this._renderLinks(); this._emit(); });
       host.appendChild(el);
     });
   }
 
   getCardSize(){ return 3; }
 }
-customElements.define("flow-network-card-editor-v3", FlowNetworkCardEditorV3);
+customElements.define("flow-network-card-editor-v4", FlowNetworkCardEditorV4);
