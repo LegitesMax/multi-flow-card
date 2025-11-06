@@ -1,172 +1,97 @@
-// multi-flow-card.js
-
-import * as d3 from "https://cdn.skypack.dev/d3@7";
-
 class MultiFlowCard extends HTMLElement {
   setConfig(config) {
     this.config = config;
     this.attachShadow({ mode: 'open' });
-    this.shadowRoot.innerHTML = `
+
+    const style = `
       <style>
         :host {
           display: block;
-          height: 500px;
           position: relative;
           font-family: sans-serif;
         }
+        .node {
+          position: absolute;
+          padding: 8px 12px;
+          background: #2c3e50;
+          color: white;
+          border-radius: 8px;
+          text-align: center;
+          min-width: 100px;
+        }
         svg {
+          position: absolute;
           width: 100%;
           height: 100%;
+          z-index: 0;
         }
-        .node circle {
-          stroke: #999;
-          stroke-width: 2px;
-        }
-        .node text {
-          pointer-events: none;
-          font-size: 20px;
-          fill: white;
-        }
-        .tooltip {
-          position: absolute;
-          background: rgba(0, 0, 0, 0.7);
-          color: white;
-          padding: 4px 8px;
-          border-radius: 4px;
-          pointer-events: none;
-          font-size: 12px;
-          z-index: 10;
+        .node-content {
+          z-index: 1;
         }
       </style>
-      <div id="tooltip" class="tooltip" style="display:none;"></div>
-      <svg></svg>
     `;
 
-    this.svg = d3.select(this.shadowRoot).select("svg");
-    this.tooltip = this.shadowRoot.getElementById("tooltip");
-    this.simulation = null;
+    const container = document.createElement('div');
+    container.innerHTML = style + `<div class="node-content"></div><svg></svg>`;
+    this.shadowRoot.appendChild(container);
+
+    this.render();
+  }
+
+  render() {
+    const content = this.shadowRoot.querySelector('.node-content');
+    const svg = this.shadowRoot.querySelector('svg');
+    content.innerHTML = '';
+    svg.innerHTML = '';
+
+    const nodes = {};
+    const nodeElements = {};
+
+    // Render nodes
+    this.config.nodes.forEach((n) => {
+      const el = document.createElement('div');
+      el.classList.add('node');
+      el.innerText = n.label || n.id;
+      el.style.left = n.x + 'px';
+      el.style.top = n.y + 'px';
+      content.appendChild(el);
+      nodes[n.id] = n;
+      nodeElements[n.id] = el;
+    });
+
+    // Render connections
+    this.config.connections.forEach((conn) => {
+      const from = nodeElements[conn.from];
+      const to = nodeElements[conn.to];
+      if (!from || !to) return;
+
+      const fromRect = from.getBoundingClientRect();
+      const toRect = to.getBoundingClientRect();
+      const svgRect = svg.getBoundingClientRect();
+
+      const x1 = from.offsetLeft + from.offsetWidth / 2;
+      const y1 = from.offsetTop + from.offsetHeight / 2;
+      const x2 = to.offsetLeft + to.offsetWidth / 2;
+      const y2 = to.offsetTop + to.offsetHeight / 2;
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", 'line');
+      path.setAttribute('x1', x1);
+      path.setAttribute('y1', y1);
+      path.setAttribute('x2', x2);
+      path.setAttribute('y2', y2);
+      path.setAttribute('stroke', conn.color || 'white');
+      path.setAttribute('stroke-width', '2');
+      svg.appendChild(path);
+    });
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this.config) this.renderGraph();
-  }
-
-  renderGraph() {
-    const nodes = this.config.nodes.map((n) => {
-      const entity = this._hass.states[n.entity || ""];
-      const state = entity ? entity.state : null;
-      return {
-        id: n.id,
-        label: n.label,
-        icon: n.icon || "mdi:help-circle",
-        entity_id: n.entity,
-        state: state,
-      };
-    });
-
-    const links = this.config.connections.map((c) => ({
-      source: c.from,
-      target: c.to,
-      color: c.color || "#ccc",
-    }));
-
-    this.svg.selectAll("*").remove();
-
-    const g = this.svg.append("g");
-
-    this.simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id).distance(120))
-      .force("charge", d3.forceManyBody().strength(-400))
-      .force("center", d3.forceCenter(this.clientWidth / 2, this.clientHeight / 2));
-
-    const link = g.selectAll(".link")
-      .data(links)
-      .enter().append("line")
-      .attr("stroke", d => d.color)
-      .attr("stroke-width", 2);
-
-    const node = g.selectAll(".node")
-      .data(nodes)
-      .enter().append("g")
-      .attr("class", "node")
-      .call(d3.drag()
-        .on("start", (event, d) => this.dragstarted(event, d))
-        .on("drag", (event, d) => this.dragged(event, d))
-        .on("end", (event, d) => this.dragended(event, d)))
-      .on("click", (event, d) => this.showTooltip(event, d));
-
-    node.append("circle")
-      .attr("r", 24)
-      .attr("fill", d => d.state === "on" ? "#4caf50" : "#607d8b");
-
-    node.append("text")
-      .attr("dy", 7)
-      .attr("text-anchor", "middle")
-      .text(d => this.getIconChar(d.icon));
-
-    node.append("title")
-      .text(d => d.label);
-
-    this.simulation.on("tick", () => {
-      link
-        .attr("x1", d => d.source.x)
-        .attr("y1", d => d.source.y)
-        .attr("x2", d => d.target.x)
-        .attr("y2", d => d.target.y);
-
-      node
-        .attr("transform", d => `translate(${d.x},${d.y})`);
-    });
-  }
-
-  getIconChar(icon) {
-    const mdi = {
-      'mdi:lightbulb': '\uf335',
-      'mdi:motion-sensor': '\uf21c',
-      'mdi:script': '\uf3b5',
-      'mdi:help-circle': '\uf2d7'
-    };
-    return mdi[icon] || '?';
-  }
-
-  showTooltip(event, d) {
-    const state = this._hass.states[d.entity_id];
-    const content = `
-      <strong>${d.label}</strong><br>
-      Entity: ${d.entity_id}<br>
-      State: ${state ? state.state : 'unknown'}
-    `;
-    this.tooltip.innerHTML = content;
-    this.tooltip.style.display = 'block';
-    this.tooltip.style.left = `${event.offsetX + 10}px`;
-    this.tooltip.style.top = `${event.offsetY + 10}px`;
-
-    clearTimeout(this._tooltipTimer);
-    this._tooltipTimer = setTimeout(() => {
-      this.tooltip.style.display = 'none';
-    }, 3000);
-  }
-
-  dragstarted(event, d) {
-    if (!event.active) this.simulation.alphaTarget(0.3).restart();
-    d.fx = d.x;
-    d.fy = d.y;
-  }
-
-  dragged(event, d) {
-    d.fx = event.x;
-    d.fy = event.y;
-  }
-
-  dragended(event, d) {
-    if (!event.active) this.simulation.alphaTarget(0);
-    d.fx = null;
-    d.fy = null;
+    // optional: you could use hass.state here to update node styles
   }
 
   getCardSize() {
-    return 5;
+    return 4;
   }
 }
 
