@@ -1,9 +1,10 @@
 // flow-network-card.js
-// Flow Network Card (no root) + Simple Visual Editor V6
-// CHANGES:
-// - Node has `id` (your friendly key like "pv") AND `entity` (the real HA sensor)
-// - Links use Node IDs for from/to
-// - Each link can have `flow_entity` (separate from the node's entity) to control direction/stop
+// Flow Network Card (YAML-only)
+// - No visual editor (pure YAML)
+// - Friendly node IDs + separate sensor entity
+// - Optional grid placement per node: row/col or "grid: 'r:c'"
+// - If no row/col given anywhere -> auto-centered layout per row
+// - Per-link flow_entity controls direction/stop (>0 fwd, <0 rev, ~0 stop)
 
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
@@ -15,10 +16,10 @@ class FlowNetworkCard extends HTMLElement {
       layout: { mode: "auto", columns: 3, gap: 22, padding: 18 },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
       nodes: [
-        { id: "netz",  label: "Netz",     entity: "sensor.grid_power",   shape: "rounded", size: 72, ring: "#8a2be2", fill: "#1c1426", icon: "mdi:transmission-tower", icon_size: 28, icon_color: "#caa9ff" },
-        { id: "pv",    label: "PV",       entity: "sensor.pv_power",     shape: "rounded", size: 72, ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-power-variant-outline", icon_size: 28, icon_color: "#baffea" },
-        { id: "batt",  label: "Batterie", entity: "sensor.battery_power",shape: "rounded", size: 72, ring: "#ff6b6b", fill: "#2a1f22", icon: "mdi:battery-high", icon_size: 26, icon_color: "#ffc2c2" },
-        { id: "home",  label: "Zuhause",  entity: "sensor.house_power",  shape: "rounded", size: 80, ring: "#23b0ff", fill: "#0f1a22", icon: "mdi:home-variant", icon_size: 28, icon_color: "#99dbff" }
+        { id: "netz",  label: "Netz",     entity: "sensor.grid_power",    shape: "rounded", size: 72, ring: "#8a2be2", fill: "#1c1426", icon: "mdi:transmission-tower", icon_size: 28, icon_color: "#caa9ff" },
+        { id: "pv",    label: "PV",       entity: "sensor.pv_power",      shape: "rounded", size: 72, ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-power-variant-outline", icon_size: 28, icon_color: "#baffea" },
+        { id: "batt",  label: "Batterie", entity: "sensor.battery_power", shape: "rounded", size: 72, ring: "#ff6b6b", fill: "#2a1f22", icon: "mdi:battery-high", icon_size: 26, icon_color: "#ffc2c2" },
+        { id: "home",  label: "Zuhause",  entity: "sensor.house_power",   shape: "rounded", size: 80, ring: "#23b0ff", fill: "#0f1a22", icon: "mdi:home-variant", icon_size: 28, icon_color: "#99dbff" }
       ],
       links: [
         { from: "netz", to: "home", color: "#8a2be2", width: 2, speed: 0.8, flow_entity: "sensor.grid_to_home_kw", zero_threshold: 0.01 },
@@ -27,9 +28,9 @@ class FlowNetworkCard extends HTMLElement {
       ]
     };
   }
-  static getConfigElement() {
-    return document.createElement("flow-network-card-editor-v6");
-  }
+
+  // No visual editor:
+  static getConfigElement() { return null; }
 
   setConfig(config) {
     this._config = {
@@ -41,6 +42,7 @@ class FlowNetworkCard extends HTMLElement {
       layout: { mode: "auto", columns: 3, gap: 20, padding: 16 },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
       value_below_icon_factor: 0.65,
+      missing_behavior: "stop", // when a link has no flow_entity: "stop" | "infer"
       ...config
     };
 
@@ -72,7 +74,7 @@ class FlowNetworkCard extends HTMLElement {
       document.addEventListener("visibilitychange", () => this._visible = document.visibilityState === "visible");
 
       this._lastTs = 0;
-      this._iconEls = new Map(); // keyed by node.id
+      this._iconEls = new Map(); // by node.id
       this._animStart();
     }
 
@@ -96,70 +98,136 @@ class FlowNetworkCard extends HTMLElement {
 
   // ---------- data ----------
   _prepare() {
-    this._nodes = (this._config.nodes || []).map((n, i) => ({
-      id: String(n.id || `n${i}`),                      // friendly ID like "pv"
-      label: n.label || n.id,
-      entity: n.entity || "",                           // real sensor for value
-      shape: (n.shape || "rounded").toLowerCase(),
-      size: Math.max(44, Number(n.size || 64)),
-      ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
-      ringWidth: Math.max(2, Number(n.ringWidth || 3)),
-      text_color: n.color || this._config.node_text_color,
-      fontSize: Math.max(11, Number(n.fontSize || 13)),
-      x: (this._config.layout?.mode === "manual" && typeof n.x === "number") ? this._clamp01(n.x) : null,
-      y: (this._config.layout?.mode === "manual" && typeof n.y === "number") ? this._clamp01(n.y) : null,
-      order: n.order ?? i,
-      icon: n.icon || null,
-      icon_size: Math.max(14, Number(n.icon_size || Math.round((n.size || 64) * 0.38))),
-      icon_color: n.icon_color || "#ffffff",
-      _labelSide: "top"
-    }));
+    this._nodes = (this._config.nodes || []).map((n, i) => {
+      // parse grid string "r:c"
+      let row = n.row, col = n.col;
+      if (!row && !col && typeof n.grid === "string") {
+        const m = n.grid.trim().match(/^(\d+)\s*:\s*(\d+)$/);
+        if (m) { row = Number(m[1]); col = Number(m[2]); }
+      }
+      return {
+        id: String(n.id || `n${i}`),
+        label: n.label || n.id,
+        entity: n.entity || "",
+        shape: (n.shape || "rounded").toLowerCase(),
+        size: Math.max(44, Number(n.size || 64)),
+        ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
+        ringWidth: Math.max(2, Number(n.ringWidth || 3)),
+        text_color: n.color || this._config.node_text_color,
+        fontSize: Math.max(11, Number(n.fontSize || 13)),
+        x: (this._config.layout?.mode === "manual" && typeof n.x === "number") ? this._clamp01(n.x) : null,
+        y: (this._config.layout?.mode === "manual" && typeof n.y === "number") ? this._clamp01(n.y) : null,
+        order: n.order ?? i,
+        icon: n.icon || null,
+        icon_size: Math.max(14, Number(n.icon_size || Math.round((n.size || 64) * 0.38))),
+        icon_color: n.icon_color || "#ffffff",
+        row: Number.isFinite(row) ? Math.max(1, Math.floor(row)) : null,
+        col: Number.isFinite(col) ? Math.max(1, Math.floor(col)) : null,
+        _labelSide: "top"
+      };
+    });
 
-    // map by NODE ID
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
-    // links use NODE IDs; direction controlled by flow_entity
-	this._links = (this._config.links || [])
-	  .map(l => ({
-		from: String(l.from || ""),
-		to: String(l.to || ""),
-		color: l.color || "rgba(255,255,255,0.85)",
-		width: Math.max(1, Number(l.width || 2)),
-		speed: Math.max(0.05, Number(l.speed || 0.8)),
-		curve: Number.isFinite(l.curve) ? Math.max(-0.35, Math.min(0.35, l.curve)) : 0,
-		flow_entity: l.flow_entity || l.entity || null,
-		zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
-		_t: 0,
-		_dir: 0 // <--- vorher 1; jetzt default: keine Animation
-	  }))
-	  .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
+    this._links = (this._config.links || [])
+      .map(l => ({
+        from: String(l.from || ""),
+        to: String(l.to || ""),
+        color: l.color || "rgba(255,255,255,0.85)",
+        width: Math.max(1, Number(l.width || 2)),
+        speed: Math.max(0.05, Number(l.speed || 0.8)),
+        curve: Number.isFinite(l.curve) ? Math.max(-0.35, Math.min(0.35, l.curve)) : 0,
+        flow_entity: l.flow_entity || l.entity || null,
+        zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
+        _t: 0,
+        _dir: 0 // default stop; will be set in _updateLinkDirections()
+      }))
+      .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
+  // ---------- layout ----------
   _applyAutoLayout(pxW, pxH) {
     const cfg = this._config.layout || {};
     const cols = Math.max(1, Math.floor(cfg.columns || 3));
     const gap = Math.max(8, Number(cfg.gap || 20));
     const pad = Math.max(8, Number(cfg.padding || 16));
-    const n = this._nodes.length;
-    const rows = Math.ceil(n / cols);
-    const cellW = (pxW - pad*2 - gap*(cols-1)) / cols;
+
+    const anyPinned = this._nodes.some(n => Number.isFinite(n.row) || Number.isFinite(n.col));
+
+    // compute cell size square, scaled to height if needed
+    const estRows = Math.ceil(this._nodes.length / cols);
+    const baseCellW = (pxW - pad*2 - gap*(cols-1)) / cols;
+
+    if (!anyPinned) {
+      // previous behavior: per-row centering
+      const n = this._nodes.length;
+      const rows = estRows;
+      const cellW = baseCellW;
+      const cellH = cellW;
+      const totalH = pad*2 + rows*cellH + gap*(rows-1);
+      const scale = totalH > pxH ? (pxH - pad*2 - gap*(rows-1)) / (rows * cellH) : 1;
+      const cw = cellW * scale, ch = cellH * scale;
+
+      this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((node, idx) => {
+        const r = Math.floor(idx / cols);
+        const leftInRow = Math.min(cols, (n - r*cols));
+        const rowWidth = leftInRow*cw + (leftInRow-1)*gap;
+        const leftOffset = (pxW - rowWidth)/2;
+        const c = idx % cols;
+        const cx = leftOffset + c*(cw+gap) + cw/2;
+        const top = (pxH - (rows*ch + (rows-1)*gap))/2;
+        const cy = top + r*(ch+gap) + ch/2;
+        node.x = this._clamp01(cx / pxW);
+        node.y = this._clamp01(cy / pxH);
+      });
+      return;
+    }
+
+    // GRID MODE (some nodes pinned with row/col)
+    // rows = max(specified row, ceil(n/cols))
+    const maxPinnedRow = this._nodes.reduce((m,n)=>Math.max(m, n.row||0), 0);
+    const rows = Math.max(maxPinnedRow, estRows);
+
+    const cellW = baseCellW;
     const cellH = cellW;
     const totalH = pad*2 + rows*cellH + gap*(rows-1);
     const scale = totalH > pxH ? (pxH - pad*2 - gap*(rows-1)) / (rows * cellH) : 1;
     const cw = cellW * scale, ch = cellH * scale;
 
-    this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((n, idx) => {
-      const r = Math.floor(idx / cols);
-      const leftInRow = Math.min(cols, (this._nodes.length - r*cols));
-      const rowWidth = leftInRow*cw + (leftInRow-1)*gap;
-      const leftOffset = (pxW - rowWidth)/2;
-      const c = idx % cols;
-      const cx = leftOffset + c*(cw+gap) + cw/2;
-      const top = (pxH - (rows*ch + (rows-1)*gap))/2;
-      const cy = top + r*(ch+gap) + ch/2;
-      n.x = this._clamp01(cx / pxW);
-      n.y = this._clamp01(cy / pxH);
-    });
+    // build occupancy grid
+    const grid = Array.from({length: rows}, ()=> Array.from({length: cols}, ()=> null));
+
+    // place pinned nodes (clamped to grid)
+    const free = [];
+    const byOrder = [...this._nodes].sort((a,b)=>(a.order??0)-(b.order??0));
+    for (const n of byOrder) {
+      if (Number.isFinite(n.row) || Number.isFinite(n.col)) {
+        const r = Math.max(1, Math.min(rows, n.row || 1)) - 1;
+        const c = Math.max(1, Math.min(cols, n.col || 1)) - 1;
+        if (!grid[r][c]) grid[r][c] = n; else free.push(n); // collision -> treat as free
+      } else free.push(n);
+    }
+    // fill remaining cells row-major
+    for (let r=0;r<rows;r++){
+      for (let c=0;c<cols;c++){
+        if (!grid[r][c] && free.length) grid[r][c] = free.shift();
+      }
+    }
+
+    // draw positions for fixed grid (whole grid centered)
+    const gridWidth = cols*cw + (cols-1)*gap;
+    const leftOffset = (pxW - gridWidth)/2;
+    const topOffset = (pxH - (rows*ch + (rows-1)*gap))/2;
+
+    for (let r=0;r<rows;r++){
+      for (let c=0;c<cols;c++){
+        const n = grid[r][c]; if (!n) continue;
+        const cx = leftOffset + c*(cw+gap) + cw/2;
+        const cy = topOffset + r*(ch+gap) + ch/2;
+        n.x = this._clamp01(cx / pxW);
+        n.y = this._clamp01(cy / pxH);
+      }
+    }
   }
 
   // ---------- utils ----------
@@ -183,17 +251,24 @@ class FlowNetworkCard extends HTMLElement {
     return isNaN(num) ? NaN : num;
   }
 
-	_updateLinkDirections() {
-	  if (!this._links) return;
-	  for (const l of this._links) {
-		if (!l.flow_entity) { l._dir = 0; continue; } // <--- vorher 1; jetzt stoppen
-		const v = this._readNumber(l.flow_entity);
-		if (isNaN(v)) { l._dir = 0; continue; }       // unknown/unavailable => stoppen
-		if (Math.abs(v) <= (l.zero_threshold ?? 0.0001)) l._dir = 0;
-		else l._dir = v > 0 ? 1 : -1;
-	  }
-	}
-
+  _updateLinkDirections() {
+    if (!this._links) return;
+    const missing = (this._config.missing_behavior || "stop"); // "stop" | "infer"
+    for (const l of this._links) {
+      if (l.flow_entity) {
+        const v = this._readNumber(l.flow_entity);
+        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) { l._dir = 0; continue; }
+        l._dir = v > 0 ? 1 : -1;
+        continue;
+      }
+      // no flow_entity
+      if (missing === "stop") { l._dir = 0; continue; }
+      const fromNode = this._nodeMap.get(l.from);
+      const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
+      if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) l._dir = 0;
+      else l._dir = 1;
+    }
+  }
 
   _resize() {
     const rect = this.wrapper.getBoundingClientRect();
@@ -259,7 +334,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
-  // ---------- label side ----------
+  // ---------- labels ----------
   _computeLabelSides() {
     const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));
     for (const l of this._links) {
@@ -276,7 +351,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
-  // ---------- draw background ----------
+  // ---------- draw bg ----------
   _drawBg() {
     const ctx = this.bgCtx;
     const w = this.bg.width  / (window.devicePixelRatio || 1);
@@ -327,7 +402,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // value (from node.entity) ALWAYS under icon
+    // value (node.entity), always under icon
     const v = this._readEntityValue(n.entity);
     const k = Math.max(0.45, Number(this._config.value_below_icon_factor) || 0.65);
     const valueY = p.y + (n.icon ? n.icon_size * k : 0);
@@ -367,7 +442,7 @@ class FlowNetworkCard extends HTMLElement {
 
     for (const l of this._links) {
       if (!l._pA || !l._pB) continue;
-      if (l._dir === 0) continue; // paused
+      if (l._dir === 0) continue;
 
       l._t = (l._t + (dtMs/1000) * (l.speed || 0.8)) % 1;
       const tPrime = l._dir === 1 ? l._t : (1 - l._t);
@@ -412,203 +487,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (IDs + flow entity)",
-  description: "Neon nodes, static lines + smooth dot; friendly node IDs; entity-driven direction.",
+  name: "Flow Network Card (YAML only)",
+  description: "Neon nodes, static lines + smooth dot; grid placement per node; entity-driven direction.",
   preview: true
 });
-
-/* ===========
-   SIMPLE EDITOR V6 (vanilla, tidy)
-   =========== */
-class FlowNetworkCardEditorV6 extends HTMLElement {
-  constructor(){ super(); this.attachShadow({mode:"open"}); this._config={}; }
-  set hass(h){ this._hass = h; }
-  get value(){ return this._config; }
-  setConfig(config){
-    this._config = {
-      type: "custom:flow-network-card",
-      background: config?.background ?? "transparent",
-      height: Number.isFinite(config?.height) ? config.height : 320,
-      value_precision: Number.isFinite(config?.value_precision) ? config.value_precision : 2,
-      node_text_color: config?.node_text_color ?? 'rgba(255,255,255,0.92)',
-      value_below_icon_factor: config?.value_below_icon_factor ?? 0.65,
-      layout: { mode: (config?.layout?.mode)||"auto", columns: config?.layout?.columns ?? 3, gap: config?.layout?.gap ?? 20, padding: config?.layout?.padding ?? 16 },
-      dot: { size: config?.dot?.size ?? 5, glow: config?.dot?.glow ?? true, fade_zone: config?.dot?.fade_zone ?? 0.10 },
-      nodes: Array.isArray(config?.nodes) ? config.nodes : [],
-      links: Array.isArray(config?.links) ? config.links : []
-    };
-    this._render();
-  }
-  _emit(){ const e=new Event("config-changed",{bubbles:true,composed:true}); e.detail={config:this._config}; this.dispatchEvent(e); }
-
-  _render(){
-    const css = `
-      :host{display:block;font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--primary-text-color,#fff)}
-      .wrap{display:grid;gap:16px;padding:10px}
-      fieldset{border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px}
-      legend{opacity:.85;padding:0 8px}
-      .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-      .row2{grid-template-columns:repeat(2,minmax(0,1fr))}
-      .list{display:flex;flex-direction:column;gap:12px}
-      .item{border:1px dashed rgba(255,255,255,.15);border-radius:10px;padding:10px}
-      label{display:flex;flex-direction:column;gap:6px}
-      input,select{background:#1f2328;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 10px}
-      .btns{display:flex;gap:8px;margin-top:10px}
-      button{background:#2d333b;color:#e6edf3;border:1px solid #30363d;padding:6px 10px;border-radius:8px;cursor:pointer}
-      button:hover{filter:brightness(1.08)}
-    `;
-    this.shadowRoot.innerHTML = `
-      <style>${css}</style>
-      <div class="wrap">
-        <fieldset>
-          <legend>Allgemein</legend>
-          <div class="row">
-            <label>Hintergrund <input data-k="background" value="${this._config.background}"></label>
-            <label>Höhe (px) <input type="number" data-k="height" value="${this._config.height}"></label>
-            <label>Nachkommastellen <input type="number" min="0" max="4" step="1" data-k="value_precision" value="${this._config.value_precision}"></label>
-          </div>
-          <div class="row">
-            <label>Layout
-              <select data-k="layout.mode">
-                <option value="auto" ${this._config.layout.mode==="auto"?"selected":""}>auto (zentriert)</option>
-                <option value="manual" ${this._config.layout.mode!=="auto"?"selected":""}>manuell (x/y)</option>
-              </select>
-            </label>
-            <label>Spalten <input type="number" min="1" max="8" step="1" data-k="layout.columns" value="${this._config.layout.columns}"></label>
-            <label>Gap <input type="number" min="0" max="80" step="1" data-k="layout.gap" value="${this._config.layout.gap}"></label>
-          </div>
-          <div class="row">
-            <label>Padding <input type="number" min="0" max="120" step="1" data-k="layout.padding" value="${this._config.layout.padding}"></label>
-            <label>Punkt-Größe <input type="number" min="2" max="12" step="1" data-k="dot.size" value="${this._config.dot.size}"></label>
-            <label>Fade-Zone (0–0.3) <input type="number" min="0" max="0.3" step="0.01" data-k="dot.fade_zone" value="${this._config.dot.fade_zone}"></label>
-          </div>
-          <div class="row2">
-            <label>Textfarbe im Node <input data-k="node_text_color" value="${this._config.node_text_color}"></label>
-            <label>Abstand Wert unter Icon (0.45–0.9) <input type="number" min="0.45" max="0.9" step="0.01" data-k="value_below_icon_factor" value="${this._config.value_below_icon_factor}"></label>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>Nodes</legend>
-          <div id="nodes" class="list"></div>
-          <div class="btns"><button id="addNode">+ Node</button></div>
-        </fieldset>
-
-        <fieldset>
-          <legend>Links</legend>
-          <div id="links" class="list"></div>
-          <div class="btns"><button id="addLink">+ Link</button></div>
-        </fieldset>
-      </div>
-    `;
-
-    // base inputs
-    this.shadowRoot.querySelectorAll('[data-k]').forEach(el=>{
-      el.addEventListener('input',()=>{
-        const path = el.dataset.k.split('.'); let t=this._config;
-        for(let i=0;i<path.length-1;i++) t=t[path[i]];
-        t[path[path.length-1]] = (el.type==='number') ? Number(el.value) : el.value;
-        this._emit();
-      });
-    });
-
-    this._renderNodes();
-    this._renderLinks();
-
-    this.shadowRoot.getElementById('addNode').onclick = ()=>{
-      this._config.nodes.push({
-        id:"", label:"", entity:"", shape:"rounded", size:70,
-        ring:"#23b0ff", fill:"#0f1a22",
-        icon:"", icon_size:26, icon_color:"#ffffff"
-      });
-      this._renderNodes(); this._emit();
-    };
-    this.shadowRoot.getElementById('addLink').onclick = ()=>{
-      this._config.links.push({ from:"", to:"", color:"#23b0ff", width:2, speed:0.8, curve:0, flow_entity:"", zero_threshold:0.0001 });
-      this._renderLinks(); this._emit();
-    };
-  }
-
-  _renderNodes(){
-    const host=this.shadowRoot.getElementById('nodes'); host.innerHTML='';
-    this._config.nodes.forEach((n,i)=>{
-      const el=document.createElement('div'); el.className='item';
-      el.innerHTML=`
-        <div class="row">
-          <label>Node-ID (frei) <input data-k="id" value="${n.id??''}" placeholder="pv, netz, batt, home"></label>
-          <label>Label <input data-k="label" value="${n.label??''}" placeholder="Anzeigename"></label>
-          <label>Sensor-Entity <input data-k="entity" value="${n.entity??''}" placeholder="sensor.xyz_power"></label>
-        </div>
-        <div class="row">
-          <label>Ring-Farbe <input data-k="ring" value="${n.ring??'#23b0ff'}"></label>
-          <label>Fill-Farbe <input data-k="fill" value="${n.fill??'#0f1a22'}"></label>
-          <label>Icon-Farbe <input data-k="icon_color" value="${n.icon_color??'#ffffff'}"></label>
-        </div>
-        <div class="row">
-          <label>Icon (mdi:...) <input data-k="icon" value="${n.icon??''}" placeholder="mdi:home-variant"></label>
-          <label>Icon-Größe <input type="number" min="14" max="64" step="1" data-k="icon_size" value="${n.icon_size??26}"></label>
-          <label>Size <input type="number" min="44" max="160" step="1" data-k="size" value="${n.size??70}"></label>
-        </div>
-        <details>
-          <summary>Erweitert (manuelle Position, Text)</summary>
-          <div class="row">
-            <label>x (0..1) <input type="number" step="0.01" min="0" max="1" data-k="x" value="${n.x??''}"></label>
-            <label>y (0..1) <input type="number" step="0.01" min="0" max="1" data-k="y" value="${n.y??''}"></label>
-            <label>Font Size <input type="number" min="10" max="24" step="1" data-k="fontSize" value="${n.fontSize??13}"></label>
-          </div>
-        </details>
-        <div class="btns"><button data-act="del">– Entfernen</button></div>
-      `;
-      el.querySelectorAll('[data-k]').forEach(inp=>{
-        inp.addEventListener('input',()=>{
-          const k=inp.dataset.k; let v = (inp.type==='number') ? Number(inp.value) : inp.value;
-          if (['x','y'].includes(k)) v = (v===""?null:Math.max(0,Math.min(1,Number(v))));
-          n[k]=v; this._emit();
-        });
-      });
-      el.querySelector('[data-act="del"]').onclick=()=>{ this._config.nodes.splice(i,1); this._renderNodes(); this._emit(); };
-      host.appendChild(el);
-    });
-  }
-
-  _renderLinks(){
-    const host=this.shadowRoot.getElementById('links'); host.innerHTML='';
-    const ids=this._config.nodes.map(n=>n.id).filter(Boolean);
-    this._config.links.forEach((l,i)=>{
-      const el=document.createElement('div'); el.className='item';
-      el.innerHTML=`
-        <div class="row">
-          <label>From (Node-ID)
-            <select data-k="from">${['',...ids].map(id=>`<option value="${id}" ${l.from===id?'selected':''}>${id||'-'}</option>`).join('')}</select>
-          </label>
-          <label>To (Node-ID)
-            <select data-k="to">${['',...ids].map(id=>`<option value="${id}" ${l.to===id?'selected':''}>${id||'-'}</option>`).join('')}</select>
-          </label>
-          <label>Farbe <input data-k="color" value="${l.color??'#23b0ff'}"></label>
-        </div>
-        <div class="row">
-          <label>Breite <input type="number" min="1" max="6" step="1" data-k="width" value="${l.width??2}"></label>
-          <label>Speed <input type="number" min="0.05" max="3" step="0.05" data-k="speed" value="${l.speed??0.8}"></label>
-          <label>Kurve (-0.35..0.35) <input type="number" min="-0.35" max="0.35" step="0.01" data-k="curve" value="${l.curve??0}"></label>
-        </div>
-        <div class="row">
-          <label>Flow-Entity (Richtung/Stop) <input data-k="flow_entity" value="${l.flow_entity??''}" placeholder="sensor.flow_kw"></label>
-          <label>Zero-Threshold <input type="number" step="0.0001" data-k="zero_threshold" value="${l.zero_threshold??0.0001}"></label>
-          <span></span>
-        </div>
-        <div class="btns"><button data-act="del">– Entfernen</button></div>
-      `;
-      el.querySelectorAll('[data-k]').forEach(inp=>{
-        inp.addEventListener('input',()=>{
-          const k=inp.dataset.k; let v=(inp.type==='number')?Number(inp.value):inp.value;
-          l[k]=v; this._emit();
-        });
-      });
-      el.querySelector('[data-act="del"]').onclick=()=>{ this._config.links.splice(i,1); this._renderLinks(); this._emit(); };
-      host.appendChild(el);
-    });
-  }
-
-  getCardSize(){ return 3; }
-}
-customElements.define("flow-network-card-editor-v6", FlowNetworkCardEditorV6);
