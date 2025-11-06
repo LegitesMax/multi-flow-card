@@ -1,10 +1,6 @@
 {
-  "name": "Multi Flow Card",
-  "content_in_root": true,
-  "filename": "multi-flow-card.js",
+  "name": "Rootless Power Flow Card",
   "render_readme": true,
-  "description": "Eine visuelle Flow-Karte für Home Assistant",
-  "domain": "multi-flow-card",
-  "source": "https://github.com/LegitesMax/multi-flow-card",
-  "documentation": "https://github.com/LegitesMax/multi-flow-card"
+  "filename": "rootless-power-flow-card.js",
+  "country": "all"
 }

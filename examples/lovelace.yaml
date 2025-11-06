@@ -1,0 +1,58 @@
+# examples/lovelace.yaml
+type: custom:rootless-power-flow-card
+title: Energiefluss
+width: 800
+height: 420
+background: 'rgba(2,6,23,0.75)'
+nodes:
+  - id: grid
+    label: Netz
+    x: 120
+    y: 90
+  - id: solar
+    label: PV
+    x: 680
+    y: 90
+  - id: house
+    label: Haus
+    x: 380
+    y: 210
+  - id: car
+    label: EV
+    x: 620
+    y: 300
+  - id: battery
+    label: Akku
+    x: 140
+    y: 300
+links:
+  - from: solar
+    to: house
+    value: 4.2
+    unit: ' kW'
+    speed: 90
+    arrow: true
+  - from: grid
+    to: house
+    value: 1.1
+    unit: ' kW'
+    speed: 60
+    color: '#5DA3F4'
+  - from: house
+    to: battery
+    value: 0.6
+    unit: ' kW'
+    speed: 50
+    color: '#EAB308'
+  - from: battery
+    to: house
+    value: 0.3
+    unit: ' kW'
+    speed: -40
+    color: '#F97316'
+  - from: house
+    to: car
+    value: 2.4
+    unit: ' kW'
+    speed: 75
+focus_ids: ['house']
