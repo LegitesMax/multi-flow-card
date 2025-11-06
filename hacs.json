@@ -5,6 +5,6 @@
   "render_readme": true,
   "description": "Eine visuelle Flow-Karte für Home Assistant",
   "domain": "multi-flow-card",
-  "source": "https://github.com/dein-nutzername/multi-flow-card",
-  "documentation": "https://github.com/dein-nutzername/multi-flow-card"
+  "source": "https://github.com/LegitesMax/multi-flow-card",
+  "documentation": "https://github.com/LegitesMax/multi-flow-card"
 }
