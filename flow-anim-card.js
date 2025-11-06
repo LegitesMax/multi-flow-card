@@ -84,6 +84,32 @@ class FlowNetworkCard extends HTMLElement {
     this._prepare();
     this._resize();
     this._updateLinkDirections();
+	
+	// --- Fix: handle first-time preview misplacement ---
+	if (!this._initializedFix) {
+	  this._initializedFix = true;
+	  setTimeout(() => {
+		// Warte bis Home Assistant den Card-Container gerendert hat
+		const rect = this.wrapper?.getBoundingClientRect?.();
+		if (rect && rect.width > 0 && rect.height > 0) {
+		  this._resize();
+		} else {
+		  // Wenn immer noch 0 (z. B. weil Tab noch unsichtbar): Warte erneut
+		  const waitForVisible = () => {
+			const r = this.wrapper?.getBoundingClientRect?.();
+			if (r && r.width > 0 && r.height > 0) {
+			  this._resize();
+			} else {
+			  requestAnimationFrame(waitForVisible);
+			}
+		  };
+		  requestAnimationFrame(waitForVisible);
+		}
+	  }, 50); // 50ms reicht für alle gängigen Browser/HA-Versionen
+	}
+	this._prepare();
+	this._resize();
+	this._updateLinkDirections();
   }
 
   set hass(hass) {
@@ -93,7 +119,10 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   getCardSize() { return Math.ceil((this._config.height || 320) / 50); }
-  connectedCallback(){ this._animStart(); }
+  connectedCallback() {
+	  this._animStart();
+	  setTimeout(() => this._resize(), 150);
+	}
   disconnectedCallback(){ this._animStop(); if (this._resizeObserver) this._resizeObserver.disconnect(); }
 
   // ---------- data ----------
