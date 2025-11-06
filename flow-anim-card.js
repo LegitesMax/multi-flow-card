@@ -1,47 +1,42 @@
 // flow-network-card.js
-// Network flow card for Home Assistant – NO root node.
-// • Nodes: circle | square | rounded (rounded rectangle)
-// • Style: colored ring, glow, label, value (W/kW), optional in/out values
-// • Links: animated dashed Bezier (curved) with arrowhead and optional mid label
-// • Each node is equal; flows exist only via links
+// Elegant network flow card for Home Assistant (NO root node).
+// • Lines are static. Only a small dot moves from A -> B.
+// • Square / rounded nodes with neon ring (no blinking).
+// • Auto layout (grid) or manual positioning.
+// • Lines start/stop exactly at node borders (circle/square/rounded).
+// No external dependencies.
 
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
     return {
-      height: 300,
-      background: "transparent",
+      height: 320,
+      background: "#15181c",
       font_family: "Inter, Roboto, system-ui, sans-serif",
-      value_precision: 2,
+      layout: { mode: "auto", columns: 3, gap: 22 },
       nodes: [
-        { id: "sensor.grid_power",    x: 0.12, y: 0.62, shape: "circle",  size: 54, label: "Netz",    ring: "#8a2be2", fill: "#1c1426" },
-        { id: "sensor.home_power",    x: 0.55, y: 0.55, shape: "rounded", size: 60, label: "Zuhause", ring: "#23b0ff", fill: "#0f1a22" },
-        { id: "sensor.pv_power",      x: 0.12, y: 0.20, shape: "circle",  size: 54, label: "PV-Anlage", ring: "#ffffff88", fill: "#2a2f36" },
-        { id: "sensor.battery_power", x: 0.30, y: 0.86, shape: "circle",  size: 54, label: "Batterie", ring: "#ff6b6b", fill: "#2a1f22" },
-        { id: "sensor.co2_saved",     x: 0.78, y: 0.18, shape: "circle",  size: 56, label: "CO₂",     ring: "#ffd166", fill: "#2b2b1f" }
+        { id: "sensor.grid_power",   label: "Netz",    shape: "rounded", size: 68, ring: "#8a2be2", fill: "#1c1426" },
+        { id: "sensor.pv_power",     label: "PV",      shape: "rounded", size: 68, ring: "#7cffcb", fill: "#0f2a22" },
+        { id: "sensor.battery",      label: "Batterie",shape: "rounded", size: 68, ring: "#ff6b6b", fill: "#2a1f22" },
+        { id: "sensor.house_power",  label: "Zuhause", shape: "rounded", size: 76, ring: "#23b0ff", fill: "#0f1a22" }
       ],
       links: [
-        { from: "sensor.grid_power", to: "sensor.home_power", color: "#8a2be2", width: 2, speed: 1.6, dash: [10,8], curve: 0.10, arrow: "end", label_entity: "sensor.grid_to_home" },
-        { from: "sensor.pv_power",   to: "sensor.home_power", color: "#7cffcb", width: 2, speed: 1.2, dash: [8,8],  curve: -0.08, arrow: "end", label_entity: "sensor.pv_to_home" },
-        { from: "sensor.battery_power", to: "sensor.home_power", color: "#ff6b6b", width: 2, speed: 1.0, dash: [6,8], curve: 0.18, arrow: "end", label_entity: "sensor.batt_to_home" },
-        { from: "sensor.home_power", to: "sensor.co2_saved", color: "#ffd166", width: 2, speed: 0.8, dash: [2,10], curve: -0.12, arrow: "end", label_entity: "sensor.co2_rate" }
-      ]
+        { from: "sensor.grid_power",  to: "sensor.house_power", color: "#8a2be2", width: 2, speed: 0.8 },
+        { from: "sensor.pv_power",    to: "sensor.house_power", color: "#7cffcb", width: 2, speed: 0.9 },
+        { from: "sensor.battery",     to: "sensor.house_power", color: "#ff6b6b", width: 2, speed: 0.7 }
+      ],
+      value_precision: 2
     };
   }
 
   setConfig(config) {
     this._config = {
-      height: 280,
+      height: 300,
       background: "transparent",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
-      node_text_color: "rgba(255,255,255,0.9)",
-      muted_alpha: 0.28,                 // grau „ausgeblendet“ (z. B. bei 0-W Flow)
-      hide_zero_link_labels: true,       // keine 0-W Labels auf Links
-      in_out: {                          // optional: pro Knoten in/out Entities
-        in_color: "#7cffcb",
-        out_color: "#8a2be2",
-        font_size: 11                    // px
-      },
+      node_text_color: "rgba(255,255,255,0.92)",
+      layout: { mode: "auto", columns: 3, gap: 20, padding: 16 },
+      dot: { size: 5, glow: true }, // moving dot
       ...config
     };
 
@@ -53,25 +48,35 @@ class FlowNetworkCard extends HTMLElement {
       this.wrapper = document.createElement("div");
       this.wrapper.style.position = "relative";
       this.wrapper.style.width = "100%";
-      this.wrapper.style.height = (this._config.height || 280) + "px";
+      this.wrapper.style.height = (this._config.height || 300) + "px";
 
-      this.canvas = document.createElement("canvas");
-      this.canvas.style.display = "block";
-      this.canvas.style.width = "100%";
-      this.canvas.style.height = "100%";
+      // two layers: bg (nodes+lines), fg (moving dots)
+      this.bg = document.createElement("canvas");
+      this.fg = document.createElement("canvas");
+      for (const c of [this.bg, this.fg]) {
+        c.style.display = "block";
+        c.style.width = "100%";
+        c.style.height = "100%";
+        c.style.position = "absolute";
+        c.style.top = "0";
+        c.style.left = "0";
+      }
 
-      this.wrapper.appendChild(this.canvas);
+      this.wrapper.appendChild(this.bg);
+      this.wrapper.appendChild(this.fg);
       this.card.appendChild(this.wrapper);
       this.attachShadow({ mode: "open" }).appendChild(this.card);
 
-      this.ctx = this.canvas.getContext("2d", { alpha: true });
+      this.bgCtx = this.bg.getContext("2d", { alpha: true });
+      this.fgCtx = this.fg.getContext("2d", { alpha: true });
+
       this._resizeObserver = new ResizeObserver(() => this._resize());
       this._resizeObserver.observe(this.wrapper);
       document.addEventListener("visibilitychange", () => {
         this._visible = document.visibilityState === "visible";
       });
-
       this._visible = true;
+
       this._phase = 0;
       this._animStart();
     }
@@ -80,7 +85,7 @@ class FlowNetworkCard extends HTMLElement {
     if (this._config.height) this.wrapper.style.height = this._config.height + "px";
 
     this._prepare();
-    this._resize();
+    this._resize(); // also draws bg
   }
 
   set hass(hass) {
@@ -88,63 +93,73 @@ class FlowNetworkCard extends HTMLElement {
     if (this._config?.nodes?.length) {
       this._nodeValues = this._config.nodes.map((n) => this._readEntity(n.id));
     }
-    if (this._config?.links?.length) {
-      this._linkLabels = this._config.links.map((l) => l.label_entity ? this._readEntity(l.label_entity) : null);
-    }
-    this._needsStaticRedraw = true;
+    this._needsBgRedraw = true; // update node texts
   }
 
-  getCardSize() { return Math.ceil((this._config.height || 280) / 50); }
+  getCardSize() { return Math.ceil((this._config.height || 300) / 50); }
   connectedCallback() { this._animStart(); }
   disconnectedCallback() { this._animStop(); if (this._resizeObserver) this._resizeObserver.disconnect(); }
 
-  // ---------- data prep ----------
+  // ---------- data ----------
   _prepare() {
-    // nodes
-    this._nodeMap = new Map();
-    for (const n of (this._config.nodes || [])) {
-      this._nodeMap.set(n.id, {
-        id: n.id,
-        x: Math.max(0, Math.min(1, Number(n.x ?? 0.5))),
-        y: Math.max(0, Math.min(1, Number(n.y ?? 0.5))),
-        shape: (n.shape || "circle").toLowerCase(), // circle | square | rounded
-        size: Math.max(36, Number(n.size || 54)),
-        label: n.label || n.id,
-        unit: n.unit || "",
-        ring: n.ring || "#23b0ff",
-        glow: n.glow ?? true,
-        fill: n.fill || "#1b1f24",
-        ringWidth: Math.max(2, Number(n.ringWidth || 3)),
-        text_color: n.color || this._config.node_text_color,
-        // optional in/out entities
-        in_entity: n.in_entity || null,
-        out_entity: n.out_entity || null,
-        fontSize: Math.max(10, Number(n.fontSize || 12))
-      });
-    }
+    // normalize nodes
+    this._nodes = (this._config.nodes || []).map((n, i) => ({
+      id: n.id,
+      label: n.label || n.id,
+      shape: (n.shape || "square").toLowerCase(), // square|rounded|circle
+      size: Math.max(44, Number(n.size || 64)),
+      ring: n.ring || "#23b0ff",
+      fill: n.fill || "#121418",
+      ringWidth: Math.max(2, Number(n.ringWidth || 3)),
+      text_color: n.color || this._config.node_text_color,
+      fontSize: Math.max(11, Number(n.fontSize || 13)),
+      x: (typeof n.x === "number") ? this._clamp01(n.x) : null,
+      y: (typeof n.y === "number") ? this._clamp01(n.y) : null,
+      order: n.order ?? i
+    }));
+
+    // auto layout if no x/y
+    const needAuto = (this._config.layout?.mode || "auto") === "auto";
+    if (needAuto) this._applyAutoLayout();
+
+    // index by id
+    this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
+
     // links
-    this._links = (this._config.links || []).map(l => ({
-      from: l.from, to: l.to,
-      color: l.color || "rgba(255,255,255,0.8)",
-      width: Math.max(1, Number(l.width || 2)),
-      speed: Math.max(0.1, Number(l.speed || 1.0)),
-      dash: Array.isArray(l.dash) ? l.dash : [8,8],
-      curve: Math.max(-0.4, Math.min(0.4, Number(l.curve || 0))),
-      arrow: l.arrow || "none",                    // none | end
-      label_entity: l.label_entity || null
-    })).filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
+    this._links = (this._config.links || [])
+      .map(l => ({
+        from: l.from, to: l.to,
+        color: l.color || "rgba(255,255,255,0.8)",
+        width: Math.max(1, Number(l.width || 2)),
+        speed: Math.max(0.15, Number(l.speed || 0.8)),
+        curve: Number.isFinite(l.curve) ? Math.max(-0.35, Math.min(0.35, l.curve)) : 0 // gentle S optional
+      }))
+      .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
+  }
+
+  _applyAutoLayout() {
+    const cols = Math.max(1, Math.floor(this._config.layout.columns || 3));
+    const gap = Math.max(8, Number(this._config.layout.gap || 20));
+    const pad = Math.max(0, Number(this._config.layout.padding || 12));
+
+    // grid stored in normalized [0..1]
+    const rows = Math.ceil(this._nodes.length / cols);
+    // positions are assigned later in _resize() because we need actual px size
+    this._auto = { cols, rows, gap, pad };
   }
 
   // ---------- utils ----------
+  _clamp01(v){ return Math.max(0, Math.min(1, Number(v))); }
+
   _readEntity(id) {
     if (!this._hass || !id) return { raw: null, text: "" };
     const st = this._hass.states?.[id];
     if (!st) return { raw: null, text: "" };
     const num = Number(st.state);
     if (!isNaN(num)) {
-      const prec = this._config.value_precision ?? 2;
+      const p = this._config.value_precision ?? 2;
       const unit = st.attributes.unit_of_measurement ? " " + st.attributes.unit_of_measurement : "";
-      return { raw: num, text: num.toFixed(prec) + unit };
+      return { raw: num, text: num.toFixed(p) + unit };
     }
     return { raw: st.state, text: String(st.state) };
   }
@@ -152,234 +167,230 @@ class FlowNetworkCard extends HTMLElement {
   _resize() {
     const rect = this.wrapper.getBoundingClientRect();
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this._needsStaticRedraw = true;
+    for (const c of [this.bg, this.fg]) {
+      c.width  = Math.max(1, Math.floor(rect.width * dpr));
+      c.height = Math.max(1, Math.floor(rect.height * dpr));
+      const ctx = (c === this.bg ? this.bgCtx : this.fgCtx);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    // place auto grid if enabled
+    if (this._auto) {
+      const { cols, gap, pad } = this._auto;
+      const w = rect.width;
+      const h = rect.height;
+      const cellW = (w - pad*2 - gap*(cols-1)) / cols;
+      const cellH = cellW; // square cells
+      const usableH = pad*2 + cellH * Math.ceil(this._nodes.length / cols) + gap*(Math.ceil(this._nodes.length/cols)-1);
+      // vertically center grid
+      const top = Math.max(pad, (h - usableH)/2);
+
+      this._nodes
+        .sort((a,b)=> (a.order ?? 0) - (b.order ?? 0))
+        .forEach((n, i) => {
+          if (n.x !== null && n.y !== null) return; // manual keeps position
+          const r = Math.floor(i / cols);
+          const c = i % cols;
+          const cx = pad + c*(cellW+gap) + cellW/2;
+          const cy = top + r*(cellH+gap) + cellH/2;
+          // normalize to [0..1]
+          n.x = this._clamp01(cx / w);
+          n.y = this._clamp01(cy / h);
+        });
+    }
+
+    this._needsBgRedraw = true;
   }
 
-  // ---------- animation ----------
-  _animStart() {
-    if (this._raf) return;
-    const step = () => {
-      this._raf = requestAnimationFrame(step);
-      if (!this._visible) return;
-      this._phase += 1.0; // dash phase
-      if (this._needsStaticRedraw) { this._drawStatic(); this._needsStaticRedraw = false; }
-      this._drawLinks();
-    };
-    this._raf = requestAnimationFrame(step);
-  }
-  _animStop() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
+  // ---- geometry: intersection with node border ----
+  _edgePoint(from, to) {
+    // returns point on border of "from" towards "to"
+    const ax = from._px.x, ay = from._px.y;
+    const bx = to._px.x,   by = to._px.y;
+    const dx = bx - ax, dy = by - ay;
 
-  // ---------- drawing ----------
-  _clear() {
-    const w = this.canvas.width / (window.devicePixelRatio || 1);
-    const h = this.canvas.height / (window.devicePixelRatio || 1);
-    const ctx = this.ctx;
+    if (from.shape === "circle") {
+      const r = from.size/2;
+      const len = Math.hypot(dx,dy) || 1;
+      return { x: ax + dx/len * r, y: ay + dy/len * r };
+    }
+
+    // square/rounded -> axis-aligned rectangle
+    const hw = from.size/2, hh = from.size/2;
+    const sx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
+    const sy = dy !== 0 ? hh / Math.abs(dy) : Infinity;
+    const s = Math.min(sx, sy);
+    return { x: ax + dx * s, y: ay + dy * s };
+  }
+
+  // ---- draw static layer (nodes + lines) ----
+  _drawBg() {
+    const ctx = this.bgCtx;
+    const w = this.bg.width  / (window.devicePixelRatio || 1);
+    const h = this.bg.height / (window.devicePixelRatio || 1);
+
+    // background
     if (this._config.background && this._config.background !== "transparent") {
       ctx.fillStyle = this._config.background;
       ctx.fillRect(0,0,w,h);
     } else {
       ctx.clearRect(0,0,w,h);
     }
-    return { w, h };
+
+    // cache pixel positions
+    for (const n of this._nodes) {
+      n._px = { x: n.x * w, y: n.y * h };
+    }
+
+    // lines first (static)
+    for (const l of this._links) {
+      const a = this._nodeMap.get(l.from);
+      const b = this._nodeMap.get(l.to);
+      if (!a || !b) continue;
+      const pA = this._edgePoint(a, b);
+      const pB = this._edgePoint(b, a);
+
+      // optional gentle S-curve via single quad control point
+      const mx = (pA.x + pB.x) / 2;
+      const my = (pA.y + pB.y) / 2;
+      const dx = pB.x - pA.x, dy = pB.y - pA.y;
+      const nx = -dy, ny = dx;
+      const cx = mx + nx * (l.curve || 0);
+      const cy = my + ny * (l.curve || 0);
+
+      ctx.save();
+      ctx.strokeStyle = l.color;
+      ctx.lineWidth = l.width;
+      ctx.beginPath();
+      ctx.moveTo(pA.x, pA.y);
+      if (l.curve) ctx.quadraticCurveTo(cx, cy, pB.x, pB.y);
+      else ctx.lineTo(pB.x, pB.y);
+      ctx.stroke();
+      ctx.restore();
+
+      // store bezier control for the dot animation
+      l._pA = pA; l._pB = pB; l._c = { x: cx, y: cy }; l._curved = !!l.curve;
+    }
+
+    // nodes on top
+    for (const n of this._nodes) this._drawNode(ctx, n);
   }
 
-  _pos(node, w, h) { return { x: node.x * w, y: node.y * h }; }
+  _drawNode(ctx, n) {
+    const p = n._px;
+    const r = n.size/2;
 
-  _drawStatic() {
-    const { w, h } = this._clear();
-    const ctx = this.ctx;
+    // ring + soft glow (no blinking)
+    ctx.save();
+    ctx.shadowColor = n.ring;
+    ctx.shadowBlur = 18;
+    ctx.lineWidth = n.ringWidth;
+    ctx.strokeStyle = n.ring;
+    this._strokeShape(ctx, n.shape, p.x, p.y, r, n.size);
+    ctx.restore();
 
-    // nodes
-    for (const node of this._nodeMap.values()) {
-      const p = this._pos(node, w, h);
-      const r = node.size / 2;
+    // fill
+    ctx.save();
+    ctx.fillStyle = n.fill;
+    this._fillShape(ctx, n.shape, p.x, p.y, r, n.size);
+    ctx.restore();
 
-      // glow (outer)
-      if (node.glow) {
-        ctx.save();
-        ctx.shadowColor = node.ring;
-        ctx.shadowBlur = 16;
-        ctx.strokeStyle = node.ring;
-        ctx.lineWidth = node.ringWidth;
-        this._strokeShape(ctx, node.shape, p.x, p.y, r, node.size);
-        ctx.restore();
-      }
+    // label (top)
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = "rgba(255,255,255,0.86)";
+    ctx.font = `bold ${n.fontSize}px ${this._config.font_family}`;
+    ctx.fillText(n.label, p.x, p.y - r - 8);
+    ctx.restore();
 
-      // ring
-      ctx.save();
-      ctx.strokeStyle = node.ring;
-      ctx.lineWidth = node.ringWidth;
-      this._strokeShape(ctx, node.shape, p.x, p.y, r, node.size);
-      ctx.restore();
-
-      // fill
-      ctx.save();
-      ctx.fillStyle = node.fill;
-      this._fillShape(ctx, node.shape, p.x, p.y, r, node.size);
-      ctx.restore();
-
-      // label above
-      ctx.save();
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.font = `bold ${Math.max(11, node.fontSize)}px ${this._config.font_family}`;
-      ctx.fillText(node.label, p.x, p.y - r - 8);
-      ctx.restore();
-
-      // value centered
-      const v = this._hass ? this._readEntity(node.id) : { text: "" };
-      ctx.save();
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = node.text_color;
-      ctx.font = `bold ${Math.max(12, node.fontSize + 1)}px ${this._config.font_family}`;
-      ctx.fillText(v.text, p.x, p.y);
-      ctx.restore();
-
-      // optional in/out values (small, unten/oben)
-      if (node.in_entity || node.out_entity) {
-        const io = this._config.in_out;
-        ctx.save();
-        ctx.textAlign = "center";
-        ctx.font = `${io.font_size}px ${this._config.font_family}`;
-        if (node.in_entity) {
-          const iv = this._readEntity(node.in_entity);
-          ctx.fillStyle = io.in_color;
-          ctx.textBaseline = "top";
-          ctx.fillText(`↑ ${iv.text}`, p.x, p.y + r + 6);
-        }
-        if (node.out_entity) {
-          const ov = this._readEntity(node.out_entity);
-          ctx.fillStyle = io.out_color;
-          ctx.textBaseline = "alphabetic";
-          ctx.fillText(`↓ ${ov.text}`, p.x, p.y - r - 22);
-        }
-        ctx.restore();
-      }
-    }
+    // value (center)
+    const v = this._hass ? this._readEntity(n.id) : { text: "" };
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = n.text_color;
+    ctx.font = `bold ${Math.max(12, n.fontSize)}px ${this._config.font_family}`;
+    ctx.fillText(v.text, p.x, p.y);
+    ctx.restore();
   }
 
   _strokeShape(ctx, shape, cx, cy, r, size) {
-    if (shape === "square") {
-      ctx.strokeRect(cx - r, cy - r, size, size);
-    } else if (shape === "rounded") {
-      const rad = Math.min(14, r);
-      this._roundRect(ctx, cx - r, cy - r, size, size, rad);
-      ctx.stroke();
-    } else { // circle
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    if (shape === "circle") {
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke(); return;
     }
+    if (shape === "rounded") {
+      const rad = Math.min(14, r);
+      this._roundRect(ctx, cx - r, cy - r, size, size, rad); ctx.stroke(); return;
+    }
+    ctx.strokeRect(cx - r, cy - r, size, size); // square
   }
   _fillShape(ctx, shape, cx, cy, r, size) {
-    if (shape === "square") {
-      ctx.fillRect(cx - r, cy - r, size, size);
-    } else if (shape === "rounded") {
-      const rad = Math.min(14, r);
-      this._roundRect(ctx, cx - r, cy - r, size, size, rad);
-      ctx.fill();
-    } else {
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    if (shape === "circle") {
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill(); return;
     }
+    if (shape === "rounded") {
+      const rad = Math.min(14, r);
+      this._roundRect(ctx, cx - r, cy - r, size, size, rad); ctx.fill(); return;
+    }
+    ctx.fillRect(cx - r, cy - r, size, size);
   }
-  _roundRect(ctx, x, y, w, h, r) {
+  _roundRect(ctx, x, y, w, h, r){
     ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
     ctx.closePath();
   }
 
-  _drawLinks() {
-    const w = this.canvas.width / (window.devicePixelRatio || 1);
-    const h = this.canvas.height / (window.devicePixelRatio || 1);
-    const ctx = this.ctx;
+  // ---- animate dots only (fg layer) ----
+  _drawDots() {
+    const ctx = this.fgCtx;
+    const w = this.fg.width / (window.devicePixelRatio || 1);
+    const h = this.fg.height / (window.devicePixelRatio || 1);
+    ctx.clearRect(0,0,w,h);
 
-    let idx = -1;
-    for (const link of this._links) {
-      idx++;
-
-      const a = this._nodeMap.get(link.from);
-      const b = this._nodeMap.get(link.to);
-      if (!a || !b) continue;
-
-      const pa = this._pos(a, w, h), pb = this._pos(b, w, h);
-
-      // control point for Bezier (S-Kurve)
-      const mx = (pa.x + pb.x) / 2;
-      const my = (pa.y + pb.y) / 2;
-      const dx = pb.x - pa.x, dy = pb.y - pa.y;
-      const nx = -dy, ny = dx; // normal
-      const k = link.curve * 0.5; // curve strength
-      const cx = mx + nx * k, cy = my + ny * k;
-
-      // label value (optional)
-      let lbl = "";
-      if (link.label_entity && this._hass) {
-        const v = this._readEntity(link.label_entity);
-        if (!(this._config.hide_zero_link_labels && Number(v.raw) === 0)) lbl = v.text;
-      }
-
-      // alpha auslastung (0 -> gedimmt)
-      const alpha = (lbl === "" && this._config.hide_zero_link_labels) ? this._config.muted_alpha : 1;
+    for (const l of this._links) {
+      if (!l._pA || !l._pB) continue;
+      const t = ((this._phase * (l.speed || 0.8)) % 1000) / 1000; // 0..1
+      const pos = l._curved
+        ? this._quadPoint(l._pA, l._c, l._pB, t)
+        : { x: l._pA.x + (l._pB.x - l._pA.x)*t, y: l._pA.y + (l._pB.y - l._pA.y)*t };
 
       ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = link.color;
-      ctx.lineWidth = link.width;
-      ctx.setLineDash(link.dash);
-      const dashTotal = link.dash.reduce((s, d) => s + d, 0) || 1;
-      ctx.lineDashOffset = -((this._phase * link.speed) % dashTotal);
-
-      // bezier path
+      if (this._config.dot.glow) { ctx.shadowColor = l.color; ctx.shadowBlur = 8; }
+      ctx.fillStyle = l.color;
+      const r = Math.max(3, this._config.dot.size || 5);
       ctx.beginPath();
-      ctx.moveTo(pa.x, pa.y);
-      ctx.quadraticCurveTo(cx, cy, pb.x, pb.y);
-      ctx.stroke();
-
-      // arrowhead
-      if (link.arrow === "end") {
-        // tangent near end
-        const t = 0.98;
-        const tx = (1 - t) * (1 - t) * pa.x + 2 * (1 - t) * t * cx + t * t * pb.x;
-        const ty = (1 - t) * (1 - t) * pa.y + 2 * (1 - t) * t * cy + t * t * pb.y;
-        const t2 = 1.0;
-        const tx2 = (1 - t2) * (1 - t2) * pa.x + 2 * (1 - t2) * t2 * cx + t2 * t2 * pb.x;
-        const ty2 = (1 - t2) * (1 - t2) * pa.y + 2 * (1 - t2) * t2 * cy + t2 * t2 * pb.y;
-        const ang = Math.atan2(ty2 - ty, tx2 - tx);
-        const size = Math.max(6, link.width * 3);
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(pb.x, pb.y);
-        ctx.lineTo(pb.x - Math.cos(ang - Math.PI/6) * size, pb.y - Math.sin(ang - Math.PI/6) * size);
-        ctx.moveTo(pb.x, pb.y);
-        ctx.lineTo(pb.x - Math.cos(ang + Math.PI/6) * size, pb.y - Math.sin(ang + Math.PI/6) * size);
-        ctx.strokeStyle = link.color;
-        ctx.stroke();
-      }
-
-      // mid label
-      if (lbl) {
-        ctx.setLineDash([]);
-        ctx.font = `11px ${this._config.font_family}`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = link.color;
-        // place a bit above curve midpoint
-        const tt = 0.5;
-        const lx = (1 - tt) * (1 - tt) * pa.x + 2 * (1 - tt) * tt * cx + tt * tt * pb.x;
-        const ly = (1 - tt) * (1 - tt) * pa.y + 2 * (1 - tt) * tt * cy + tt * tt * pb.y;
-        ctx.fillText(lbl, lx, ly - 10);
-      }
-
+      ctx.arc(pos.x, pos.y, r, 0, Math.PI*2);
+      ctx.fill();
       ctx.restore();
     }
   }
+
+  _quadPoint(a, c, b, t) {
+    const u = 1 - t;
+    return {
+      x: u*u*a.x + 2*u*t*c.x + t*t*b.x,
+      y: u*u*a.y + 2*u*t*c.y + t*t*b.y
+    };
+  }
+
+  // ---- anim loop ----
+  _animStart() {
+    if (this._raf) return;
+    const step = () => {
+      this._raf = requestAnimationFrame(step);
+      if (!this._visible) return;
+      this._phase += 1; // time base
+      if (this._needsBgRedraw) { this._drawBg(); this._needsBgRedraw = false; }
+      this._drawDots();
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+  _animStop(){ if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
 }
 
 customElements.define("flow-network-card", FlowNetworkCard);
@@ -387,6 +398,6 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (No Root)",
-  description: "Nodes with ring/glow and animated curved links. No root node."
+  name: "Flow Network Card (elegant neon)",
+  description: "Static lines, moving dot, square/rounded nodes, auto layout."
 });
