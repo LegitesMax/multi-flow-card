@@ -1,11 +1,9 @@
 // flow-network-card.js
-// Flow Network Card (no root) + Simple Visual Editor V5
-// • Static lines; only a small moving dot (with fade)
-// • Centered auto layout (per row), optional manual x/y
-// • Labels auto-avoid lines (above/below)
-// • Value ALWAYS under icon; icon perfectly centered even if size changes
-// • Per-link entity controls animation: >0 forward, <0 reverse, ~0 stop
-// • Clean built-in editor (vanilla)
+// Flow Network Card (no root) + Simple Visual Editor V6
+// CHANGES:
+// - Node has `id` (your friendly key like "pv") AND `entity` (the real HA sensor)
+// - Links use Node IDs for from/to
+// - Each link can have `flow_entity` (separate from the node's entity) to control direction/stop
 
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
@@ -17,21 +15,20 @@ class FlowNetworkCard extends HTMLElement {
       layout: { mode: "auto", columns: 3, gap: 22, padding: 18 },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
       nodes: [
-        { id: "sensor.grid_power",   label: "Netz",     shape: "rounded", size: 72, ring: "#8a2be2", fill: "#1c1426", icon: "mdi:transmission-tower", icon_size: 28, icon_color: "#caa9ff" },
-        { id: "sensor.pv_power",     label: "PV",       shape: "rounded", size: 72, ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-power-variant-outline", icon_size: 28, icon_color: "#baffea" },
-        { id: "sensor.battery",      label: "Batterie", shape: "rounded", size: 72, ring: "#ff6b6b", fill: "#2a1f22", icon: "mdi:battery-high", icon_size: 26, icon_color: "#ffc2c2" },
-        { id: "sensor.house_power",  label: "Zuhause",  shape: "rounded", size: 80, ring: "#23b0ff", fill: "#0f1a22", icon: "mdi:home-variant", icon_size: 28, icon_color: "#99dbff" }
+        { id: "netz",  label: "Netz",     entity: "sensor.grid_power",   shape: "rounded", size: 72, ring: "#8a2be2", fill: "#1c1426", icon: "mdi:transmission-tower", icon_size: 28, icon_color: "#caa9ff" },
+        { id: "pv",    label: "PV",       entity: "sensor.pv_power",     shape: "rounded", size: 72, ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-power-variant-outline", icon_size: 28, icon_color: "#baffea" },
+        { id: "batt",  label: "Batterie", entity: "sensor.battery_power",shape: "rounded", size: 72, ring: "#ff6b6b", fill: "#2a1f22", icon: "mdi:battery-high", icon_size: 26, icon_color: "#ffc2c2" },
+        { id: "home",  label: "Zuhause",  entity: "sensor.house_power",  shape: "rounded", size: 80, ring: "#23b0ff", fill: "#0f1a22", icon: "mdi:home-variant", icon_size: 28, icon_color: "#99dbff" }
       ],
       links: [
-        // entity & zero_threshold sind optional
-        { from: "sensor.grid_power", to: "sensor.house_power", color: "#8a2be2", width: 2, speed: 0.8, entity: "sensor.grid_to_home_kw", zero_threshold: 0.01 },
-        { from: "sensor.pv_power",   to: "sensor.house_power", color: "#7cffcb", width: 2, speed: 0.9, entity: "sensor.pv_to_home_kw",   zero_threshold: 0.01 },
-        { from: "sensor.battery",    to: "sensor.house_power", color: "#ff6b6b", width: 2, speed: 0.7, entity: "sensor.batt_flow_kw",     zero_threshold: 0.01 }
+        { from: "netz", to: "home", color: "#8a2be2", width: 2, speed: 0.8, flow_entity: "sensor.grid_to_home_kw", zero_threshold: 0.01 },
+        { from: "pv",   to: "home", color: "#7cffcb", width: 2, speed: 0.9, flow_entity: "sensor.pv_to_home_kw",   zero_threshold: 0.01 },
+        { from: "batt", to: "home", color: "#ff6b6b", width: 2, speed: 0.7, flow_entity: "sensor.batt_flow_kw",     zero_threshold: 0.01 }
       ]
     };
   }
   static getConfigElement() {
-    return document.createElement("flow-network-card-editor-v5");
+    return document.createElement("flow-network-card-editor-v6");
   }
 
   setConfig(config) {
@@ -43,7 +40,7 @@ class FlowNetworkCard extends HTMLElement {
       node_text_color: "rgba(255,255,255,0.92)",
       layout: { mode: "auto", columns: 3, gap: 20, padding: 16 },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
-      value_below_icon_factor: 0.65, // distance multiplier (icon_size * factor)
+      value_below_icon_factor: 0.65,
       ...config
     };
 
@@ -59,7 +56,6 @@ class FlowNetworkCard extends HTMLElement {
       this.fg = document.createElement("canvas");
       for (const c of [this.bg, this.fg]) Object.assign(c.style, { display: "block", width: "100%", height: "100%", position: "absolute", inset: "0" });
 
-      // crisp icon layer
       this.iconLayer = document.createElement("div");
       Object.assign(this.iconLayer.style, { position: "absolute", inset: "0", pointerEvents: "none" });
 
@@ -85,14 +81,13 @@ class FlowNetworkCard extends HTMLElement {
 
     this._prepare();
     this._resize();
-    this._updateLinkDirections(); // ensure initial directions
+    this._updateLinkDirections();
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._config?.nodes?.length) this._nodeValues = this._config.nodes.map(n => this._readEntity(n.id));
     if (this._nodes) this._needsBgRedraw = true;
-    this._updateLinkDirections(); // react to value changes
+    this._updateLinkDirections();
   }
 
   getCardSize() { return Math.ceil((this._config.height || 320) / 50); }
@@ -102,8 +97,10 @@ class FlowNetworkCard extends HTMLElement {
   // ---------- data ----------
   _prepare() {
     this._nodes = (this._config.nodes || []).map((n, i) => ({
-      id: n.id, label: n.label || n.id,
-      shape: (n.shape || "rounded").toLowerCase(), // square|rounded|circle
+      id: String(n.id || `n${i}`),                      // friendly ID like "pv"
+      label: n.label || n.id,
+      entity: n.entity || "",                           // real sensor for value
+      shape: (n.shape || "rounded").toLowerCase(),
       size: Math.max(44, Number(n.size || 64)),
       ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
       ringWidth: Math.max(2, Number(n.ringWidth || 3)),
@@ -115,24 +112,25 @@ class FlowNetworkCard extends HTMLElement {
       icon: n.icon || null,
       icon_size: Math.max(14, Number(n.icon_size || Math.round((n.size || 64) * 0.38))),
       icon_color: n.icon_color || "#ffffff",
-      top_entities: Array.isArray(n.top_entities) ? n.top_entities : [],
-      bottom_entities: Array.isArray(n.bottom_entities) ? n.bottom_entities : [],
       _labelSide: "top"
     }));
 
+    // map by NODE ID
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
+    // links use NODE IDs; direction controlled by flow_entity
     this._links = (this._config.links || [])
       .map(l => ({
-        from: l.from, to: l.to,
+        from: String(l.from || ""),
+        to: String(l.to || ""),
         color: l.color || "rgba(255,255,255,0.85)",
         width: Math.max(1, Number(l.width || 2)),
         speed: Math.max(0.05, Number(l.speed || 0.8)),
         curve: Number.isFinite(l.curve) ? Math.max(-0.35, Math.min(0.35, l.curve)) : 0,
-        entity: l.entity || null,
+        flow_entity: l.flow_entity || l.entity || null,   // backwards compatible
         zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
         _t: 0,
-        _dir: 1 // 1 forward, -1 reverse, 0 paused
+        _dir: 1
       }))
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
@@ -149,11 +147,12 @@ class FlowNetworkCard extends HTMLElement {
     const totalH = pad*2 + rows*cellH + gap*(rows-1);
     const scale = totalH > pxH ? (pxH - pad*2 - gap*(rows-1)) / (rows * cellH) : 1;
     const cw = cellW * scale, ch = cellH * scale;
+
     this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((n, idx) => {
       const r = Math.floor(idx / cols);
       const leftInRow = Math.min(cols, (this._nodes.length - r*cols));
       const rowWidth = leftInRow*cw + (leftInRow-1)*gap;
-      const leftOffset = (pxW - rowWidth)/2; // center each row
+      const leftOffset = (pxW - rowWidth)/2;
       const c = idx % cols;
       const cx = leftOffset + c*(cw+gap) + cw/2;
       const top = (pxH - (rows*ch + (rows-1)*gap))/2;
@@ -166,9 +165,10 @@ class FlowNetworkCard extends HTMLElement {
   // ---------- utils ----------
   _clamp01(v){ return Math.max(0, Math.min(1, Number(v))); }
 
-  _readEntity(id) {
-    if (!this._hass || !id) return { raw: null, text: "" };
-    const st = this._hass.states?.[id]; if (!st) return { raw: null, text: "" };
+  _getState(id) { return this._hass?.states?.[id]; }
+  _readEntityValue(entityId) {
+    if (!this._hass || !entityId) return { raw: null, text: "" };
+    const st = this._getState(entityId); if (!st) return { raw: null, text: "" };
     const num = Number(st.state);
     if (!isNaN(num)) {
       const p = this._config.value_precision ?? 2;
@@ -177,19 +177,17 @@ class FlowNetworkCard extends HTMLElement {
     }
     return { raw: st.state, text: String(st.state) };
   }
-  _readNumber(id) {
-    if (!this._hass || !id) return NaN;
-    const st = this._hass.states?.[id];
-    if (!st) return NaN;
-    const num = Number(st.state);
+  _readNumber(entityId) {
+    const st = this._getState(entityId);
+    const num = Number(st?.state);
     return isNaN(num) ? NaN : num;
   }
 
   _updateLinkDirections() {
     if (!this._links) return;
     for (const l of this._links) {
-      if (!l.entity) { l._dir = 1; continue; }
-      const v = this._readNumber(l.entity);
+      if (!l.flow_entity) { l._dir = 1; continue; }
+      const v = this._readNumber(l.flow_entity);
       if (isNaN(v)) { l._dir = 1; continue; }
       if (Math.abs(v) <= (l.zero_threshold ?? 0.0001)) l._dir = 0;
       else l._dir = v > 0 ? 1 : -1;
@@ -205,9 +203,8 @@ class FlowNetworkCard extends HTMLElement {
       const ctx = (c === this.bg ? this.bgCtx : this.fgCtx);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-    if ((this._config.layout?.mode || "auto") === "auto") {
-      this._applyAutoLayout(rect.width, rect.height);
-    } else {
+    if ((this._config.layout?.mode || "auto") === "auto") this._applyAutoLayout(rect.width, rect.height);
+    else {
       for (const n of this._nodes) {
         const r = (n.size/2) / rect.width;
         const ry = (n.size/2) / rect.height;
@@ -261,7 +258,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
-  // ---------- labels avoid lines ----------
+  // ---------- label side ----------
   _computeLabelSides() {
     const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));
     for (const l of this._links) {
@@ -278,7 +275,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
-  // ---------- draw bg ----------
+  // ---------- draw background ----------
   _drawBg() {
     const ctx = this.bgCtx;
     const w = this.bg.width  / (window.devicePixelRatio || 1);
@@ -314,14 +311,14 @@ class FlowNetworkCard extends HTMLElement {
   _drawNode(ctx, n) {
     const p = n._px, r = n.size/2;
 
-    // neon ring
+    // ring
     ctx.save(); ctx.shadowColor = n.ring; ctx.shadowBlur = 18; ctx.lineWidth = n.ringWidth; ctx.strokeStyle = n.ring;
     this._strokeShape(ctx, n.shape, p.x, p.y, r, n.size); ctx.restore();
 
     // fill
     ctx.save(); ctx.fillStyle = n.fill; this._fillShape(ctx, n.shape, p.x, p.y, r, n.size); ctx.restore();
 
-    // label (top/bottom auto)
+    // label
     const above = (n._labelSide === "top");
     const labelY = above ? (p.y - r - 8) : (p.y + r + 8);
     const baseline = above ? "bottom" : "top";
@@ -329,8 +326,8 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // main value: ALWAYS under icon
-    const v = this._hass ? this._readEntity(n.id) : { text: "" };
+    // value (from node.entity) ALWAYS under icon
+    const v = this._readEntityValue(n.entity);
     const k = Math.max(0.45, Number(this._config.value_below_icon_factor) || 0.65);
     const valueY = p.y + (n.icon ? n.icon_size * k : 0);
     ctx.save(); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = n.text_color;
@@ -358,7 +355,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.closePath();
   }
 
-  // ---------- dots (direction + pause) ----------
+  // ---------- dots ----------
   _drawDots(dtMs) {
     const ctx = this.fgCtx;
     const w = this.fg.width / (window.devicePixelRatio || 1);
@@ -369,7 +366,7 @@ class FlowNetworkCard extends HTMLElement {
 
     for (const l of this._links) {
       if (!l._pA || !l._pB) continue;
-      if (l._dir === 0) continue; // pause near zero
+      if (l._dir === 0) continue; // paused
 
       l._t = (l._t + (dtMs/1000) * (l.speed || 0.8)) % 1;
       const tPrime = l._dir === 1 ? l._t : (1 - l._t);
@@ -402,7 +399,7 @@ class FlowNetworkCard extends HTMLElement {
       const dt = this._lastTs ? (ts - this._lastTs) : 16;
       this._lastTs = ts;
       if (this._needsBgRedraw) { this._drawBg(); this._needsBgRedraw = false; }
-      this._updateLinkDirections(); // keep directions fresh
+      this._updateLinkDirections();
       this._drawDots(dt);
     };
     this._raf = requestAnimationFrame(step);
@@ -414,15 +411,15 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (simple editor)",
-  description: "Neon nodes, static lines + smooth dot; centered auto layout; entity-driven direction.",
+  name: "Flow Network Card (IDs + flow entity)",
+  description: "Neon nodes, static lines + smooth dot; friendly node IDs; entity-driven direction.",
   preview: true
 });
 
 /* ===========
-   SIMPLE EDITOR V5 (vanilla, clean)
+   SIMPLE EDITOR V6 (vanilla, tidy)
    =========== */
-class FlowNetworkCardEditorV5 extends HTMLElement {
+class FlowNetworkCardEditorV6 extends HTMLElement {
   constructor(){ super(); this.attachShadow({mode:"open"}); this._config={}; }
   set hass(h){ this._hass = h; }
   get value(){ return this._config; }
@@ -519,14 +516,14 @@ class FlowNetworkCardEditorV5 extends HTMLElement {
 
     this.shadowRoot.getElementById('addNode').onclick = ()=>{
       this._config.nodes.push({
-        id:"", label:"", shape:"rounded", size:70,
+        id:"", label:"", entity:"", shape:"rounded", size:70,
         ring:"#23b0ff", fill:"#0f1a22",
         icon:"", icon_size:26, icon_color:"#ffffff"
       });
       this._renderNodes(); this._emit();
     };
     this.shadowRoot.getElementById('addLink').onclick = ()=>{
-      this._config.links.push({ from:"", to:"", color:"#23b0ff", width:2, speed:0.8, curve:0, entity:"", zero_threshold:0.0001 });
+      this._config.links.push({ from:"", to:"", color:"#23b0ff", width:2, speed:0.8, curve:0, flow_entity:"", zero_threshold:0.0001 });
       this._renderLinks(); this._emit();
     };
   }
@@ -537,9 +534,9 @@ class FlowNetworkCardEditorV5 extends HTMLElement {
       const el=document.createElement('div'); el.className='item';
       el.innerHTML=`
         <div class="row">
-          <label>Entity-ID <input data-k="id" value="${n.id??''}" placeholder="z.B. sensor.grid_power"></label>
-          <label>Label <input data-k="label" value="${n.label??''}" placeholder="Name"></label>
-          <label>Icon (mdi:...) <input data-k="icon" value="${n.icon??''}" placeholder="mdi:home-variant"></label>
+          <label>Node-ID (frei) <input data-k="id" value="${n.id??''}" placeholder="pv, netz, batt, home"></label>
+          <label>Label <input data-k="label" value="${n.label??''}" placeholder="Anzeigename"></label>
+          <label>Sensor-Entity <input data-k="entity" value="${n.entity??''}" placeholder="sensor.xyz_power"></label>
         </div>
         <div class="row">
           <label>Ring-Farbe <input data-k="ring" value="${n.ring??'#23b0ff'}"></label>
@@ -547,15 +544,9 @@ class FlowNetworkCardEditorV5 extends HTMLElement {
           <label>Icon-Farbe <input data-k="icon_color" value="${n.icon_color??'#ffffff'}"></label>
         </div>
         <div class="row">
-          <label>Shape
-            <select data-k="shape">
-              <option value="rounded" ${n.shape==='rounded'?'selected':''}>rounded</option>
-              <option value="square" ${n.shape==='square'?'selected':''}>square</option>
-              <option value="circle" ${n.shape==='circle'?'selected':''}>circle</option>
-            </select>
-          </label>
-          <label>Size <input type="number" min="44" max="160" step="1" data-k="size" value="${n.size??70}"></label>
+          <label>Icon (mdi:...) <input data-k="icon" value="${n.icon??''}" placeholder="mdi:home-variant"></label>
           <label>Icon-Größe <input type="number" min="14" max="64" step="1" data-k="icon_size" value="${n.icon_size??26}"></label>
+          <label>Size <input type="number" min="44" max="160" step="1" data-k="size" value="${n.size??70}"></label>
         </div>
         <details>
           <summary>Erweitert (manuelle Position, Text)</summary>
@@ -586,10 +577,10 @@ class FlowNetworkCardEditorV5 extends HTMLElement {
       const el=document.createElement('div'); el.className='item';
       el.innerHTML=`
         <div class="row">
-          <label>From
+          <label>From (Node-ID)
             <select data-k="from">${['',...ids].map(id=>`<option value="${id}" ${l.from===id?'selected':''}>${id||'-'}</option>`).join('')}</select>
           </label>
-          <label>To
+          <label>To (Node-ID)
             <select data-k="to">${['',...ids].map(id=>`<option value="${id}" ${l.to===id?'selected':''}>${id||'-'}</option>`).join('')}</select>
           </label>
           <label>Farbe <input data-k="color" value="${l.color??'#23b0ff'}"></label>
@@ -600,7 +591,7 @@ class FlowNetworkCardEditorV5 extends HTMLElement {
           <label>Kurve (-0.35..0.35) <input type="number" min="-0.35" max="0.35" step="0.01" data-k="curve" value="${l.curve??0}"></label>
         </div>
         <div class="row">
-          <label>Steuer-Entity (optional) <input data-k="entity" value="${l.entity??''}" placeholder="z.B. sensor.grid_flow_kw"></label>
+          <label>Flow-Entity (Richtung/Stop) <input data-k="flow_entity" value="${l.flow_entity??''}" placeholder="sensor.flow_kw"></label>
           <label>Zero-Threshold <input type="number" step="0.0001" data-k="zero_threshold" value="${l.zero_threshold??0.0001}"></label>
           <span></span>
         </div>
@@ -619,4 +610,4 @@ class FlowNetworkCardEditorV5 extends HTMLElement {
 
   getCardSize(){ return 3; }
 }
-customElements.define("flow-network-card-editor-v5", FlowNetworkCardEditorV5);
+customElements.define("flow-network-card-editor-v6", FlowNetworkCardEditorV6);
