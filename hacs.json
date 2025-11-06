@@ -1,0 +1,10 @@
+{
+  "name": "Flow Animation Card",
+  "content_in_root": false,
+  "filename": "flow-anim-card.js",
+  "render_readme": true,
+  "country": "all",
+  "homeassistant": "2024.12.0",
+  "iot_class": "Cloud Polling",
+  "hide_default_branch": false
+}
