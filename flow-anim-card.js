@@ -1,166 +1,208 @@
-// flow-anim-card.js
-// A minimal, high-perf canvas flow animation card for Home Assistant.
-// No root node; you control the flow direction via config.
-// Works without external libs. Uses <ha-card> wrapper from HA.
+// flow-network-card.js
+// A minimal, high-perf network flow card for Home Assistant.
+// - Nodes: circle/square with label + value (e.g., W/kW)
+// - Edges: animated dashed lines (dash offset)
+// - Config-driven layout (percent coords), HA entity binding
+// - No external deps
 
-class FlowAnimCard extends HTMLElement {
-  static getConfigElement() { return null; } // keep it simple
+class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
-    return { direction: 'right', speed: 1.0, density: 0.8, line_width: 1, colors: ['#00c2ff', '#7cffcb'], background: 'transparent', diagonal: 'down-right' };
+    return {
+      height: 260,
+      background: "transparent",
+      nodes: [
+        {
+          id: "sensor.grid_power",
+          x: 0.1,
+          y: 0.5,
+          shape: "circle",
+          size: 34,
+          label: "Grid",
+          unit: "kW",
+          color: "#1e90ff"
+        },
+        {
+          id: "sensor.house_power",
+          x: 0.5,
+          y: 0.5,
+          shape: "square",
+          size: 38,
+          label: "Haus",
+          unit: "kW",
+          color: "#ffffff",
+          fill: "#2d2d2d"
+        },
+        {
+          id: "sensor.pv_power",
+          x: 0.9,
+          y: 0.3,
+          shape: "circle",
+          size: 32,
+          label: "PV",
+          unit: "kW",
+          color: "#ffd166"
+        }
+      ],
+      links: [
+        { from: "sensor.grid_power", to: "sensor.house_power", color: "#1e90ff", width: 2, speed: 1.8 },
+        { from: "sensor.pv_power", to: "sensor.house_power", color: "#ffd166", width: 2, speed: 1.2 }
+      ]
+    };
   }
 
   setConfig(config) {
-    this._config = Object.assign(
-      {
-        direction: 'right',         // 'right' | 'left' | 'up' | 'down' | 'diagonal'
-        diagonal: 'down-right',     // 'down-right' | 'down-left' | 'up-right' | 'up-left'
-        speed: 1.0,                 // 0.1 .. 5
-        density: 0.8,               // 0.2 .. 2 (particles per area)
-        line_width: 1,              // stroke width
-        colors: ['#00c2ff', '#7cffcb'],
-        background: 'transparent',  // or a color, e.g. '#000'
-        fps_limit: 0,               // 0 = uncapped (rAF); otherwise e.g. 60/30
-        pause_when_hidden: true,
-        interactive: false          // future: mouse sway
-      },
-      config || {}
-    );
+    this._config = {
+      height: 240,
+      background: "transparent",
+      font_family: "Inter, Roboto, system-ui, sans-serif",
+      value_precision: 2, // decimals for numeric states
+      nodes: [],
+      links: [],
+      ...config
+    };
 
     if (!this.card) {
-      this.card = document.createElement('ha-card');
-      this.card.style.overflow = 'hidden';
-      this.card.style.position = 'relative';
-      this.wrapper = document.createElement('div');
-      this.wrapper.style.position = 'relative';
-      this.wrapper.style.width = '100%';
-      this.wrapper.style.height = '200px'; // default height; can be overridden by card style
-      this.card.appendChild(this.wrapper);
+      this.card = document.createElement("ha-card");
+      this.card.style.position = "relative";
+      this.card.style.overflow = "hidden";
 
-      // Canvas setup (OffscreenCanvas where available)
-      this.canvas = document.createElement('canvas');
-      this.canvas.style.width = '100%';
-      this.canvas.style.height = '100%';
-      this.canvas.style.display = 'block';
+      this.wrapper = document.createElement("div");
+      this.wrapper.style.position = "relative";
+      this.wrapper.style.width = "100%";
+      this.wrapper.style.height = (this._config.height || 240) + "px";
+
+      this.canvas = document.createElement("canvas");
+      this.canvas.style.display = "block";
+      this.canvas.style.width = "100%";
+      this.canvas.style.height = "100%";
+
       this.wrapper.appendChild(this.canvas);
+      this.card.appendChild(this.wrapper);
+      this.attachShadow({ mode: "open" }).appendChild(this.card);
 
-      this.attachShadow({ mode: 'open' }).appendChild(this.card);
-
+      this.ctx = this.canvas.getContext("2d", { alpha: true });
       this._resizeObserver = new ResizeObserver(() => this._resize());
       this._resizeObserver.observe(this.wrapper);
 
-      this._visible = true;
-      document.addEventListener('visibilitychange', () => {
-        this._visible = document.visibilityState === 'visible';
+      document.addEventListener("visibilitychange", () => {
+        this._visible = document.visibilityState === "visible";
       });
 
-      this._initDrawing();
+      this._lastDash = 0;
+      this._visible = true;
+      this._animStart();
     }
 
-    // reapply background each config change
-    this.card.style.background = this._config.background;
-    // reinit particles with new config
-    this._initParticles();
+    this.card.style.background = this._config.background || "transparent";
+    if (this._config.height) this.wrapper.style.height = this._config.height + "px";
+
+    this._normalizeConfig();
+    this._resize(); // will also trigger a redraw
   }
 
-  set hass(hass) { this._hass = hass; } // not used, but keeps HA happy
-  getCardSize() { return 3; }
+  set hass(hass) {
+    this._hass = hass;
+    // cache latest state values for nodes
+    if (this._config?.nodes?.length) {
+      this._values = this._config.nodes.map((n) => this._readEntity(n.id));
+    }
+    // redraw text values without restarting anim
+    this._needsStaticRedraw = true;
+  }
+
+  getCardSize() {
+    return Math.ceil((this._config.height || 240) / 50);
+  }
 
   connectedCallback() {
     this._animStart();
   }
+
   disconnectedCallback() {
     this._animStop();
     if (this._resizeObserver) this._resizeObserver.disconnect();
   }
 
-  // --- Animation core ---
-  _initDrawing() {
-    this._ctx = this.canvas.getContext('2d', { alpha: this._config.background === 'transparent' });
-    this._lastTs = 0;
-    this._accum = 0;
-    this._fpsInterval = this._config.fps_limit && this._config.fps_limit > 0 ? (1000 / this._config.fps_limit) : 0;
-    this._resize();
-    this._initParticles();
+  // ---------- helpers ----------
+  _normalizeConfig() {
+    // Build node map for quick lookup
+    this._nodeMap = new Map();
+    for (const n of this._config.nodes) {
+      const node = {
+        id: n.id,
+        x: this._clamp01(n.x ?? 0.5),
+        y: this._clamp01(n.y ?? 0.5),
+        shape: (n.shape || "circle").toLowerCase(), // circle|square
+        size: Math.max(18, Number(n.size || 32)),
+        label: n.label || n.id,
+        unit: n.unit || "",
+        color: n.color || "#ffffff",
+        fill: n.fill || "rgba(0,0,0,0.35)",
+        stroke: n.stroke || "rgba(255,255,255,0.25)",
+        strokeWidth: n.strokeWidth ?? 1,
+        fontSize: n.fontSize ?? 12,
+      };
+      this._nodeMap.set(node.id, node);
+    }
+    // Links
+    this._links = (this._config.links || [])
+      .map((l) => ({
+        from: l.from,
+        to: l.to,
+        color: l.color || "rgba(255,255,255,0.8)",
+        width: Math.max(1, Number(l.width || 2)),
+        speed: Math.max(0.2, Number(l.speed || 1.0)), // dash offset speed
+        dash: l.dash ?? [8, 8], // [on, off]
+        arrow: l.arrow || "none", // "none" | "end"
+      }))
+      .filter((l) => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
+  _clamp01(v) {
+    return Math.max(0, Math.min(1, Number(v)));
+  }
+
+  _readEntity(entityId) {
+    if (!this._hass || !entityId) return { raw: null, text: "" };
+    const st = this._hass.states?.[entityId];
+    if (!st) return { raw: null, text: "" };
+    const num = Number(st.state);
+    if (!isNaN(num)) {
+      const prec = this._config.value_precision ?? 2;
+      return { raw: num, text: num.toFixed(prec) + (st.attributes.unit_of_measurement ? " " + st.attributes.unit_of_measurement : "") };
+    }
+    return { raw: st.state, text: String(st.state) };
+  }
+
+  // ---------- drawing ----------
   _resize() {
     const rect = this.wrapper.getBoundingClientRect();
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
     this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-    this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this._initParticles(true);
-  }
-
-  _initParticles(justResize = false) {
-    const w = this.wrapper.clientWidth || 300;
-    const h = this.wrapper.clientHeight || 200;
-
-    // number of strands based on area and density
-    const base = Math.max(20, Math.floor((w * h) / 2500));
-    const count = Math.max(10, Math.floor(base * this._config.density));
-
-    const colors = this._config.colors && this._config.colors.length ? this._config.colors : ['#00c2ff', '#7cffcb'];
-
-    // Particle "strands": each with pos + velocity vector derived from direction
-    const dir = this._directionVector();
-    const speed = Math.max(0.05, this._config.speed);
-
-    if (!this._strands || !justResize) this._strands = [];
-    this._strands.length = count;
-
-    for (let i = 0; i < count; i++) {
-      const color = colors[i % colors.length];
-      this._strands[i] = this._strands[i] || {};
-      this._strands[i].x = Math.random() * w;
-      this._strands[i].y = Math.random() * h;
-      this._strands[i].vx = dir.x * (0.4 + Math.random() * 0.6) * speed;
-      this._strands[i].vy = dir.y * (0.4 + Math.random() * 0.6) * speed;
-      this._strands[i].life = 50 + Math.random() * 150;
-      this._strands[i].color = color;
-    }
-
-    this._lineWidth = Math.max(0.5, this._config.line_width);
-    this._bg = this._config.background;
-  }
-
-  _directionVector() {
-    const d = (this._config.direction || 'right').toLowerCase();
-    const diag = (this._config.diagonal || 'down-right').toLowerCase();
-    const map = {
-      right: { x: 1, y: 0 },
-      left: { x: -1, y: 0 },
-      up: { x: 0, y: -1 },
-      down: { x: 0, y: 1 },
-      diagonal: (() => {
-        switch (diag) {
-          case 'down-left': return { x: -0.707, y: 0.707 };
-          case 'up-right': return { x: 0.707, y: -0.707 };
-          case 'up-left': return { x: -0.707, y: -0.707 };
-          default: return { x: 0.707, y: 0.707 }; // down-right
-        }
-      })()
-    };
-    return map[d] || map.right;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._needsStaticRedraw = true;
   }
 
   _animStart() {
     if (this._raf) return;
-    const loop = (ts) => {
-      this._raf = requestAnimationFrame(loop);
-      if (this._config.pause_when_hidden && !this._visible) return;
+    const step = (ts) => {
+      this._raf = requestAnimationFrame(step);
+      if (!this._visible) return;
 
-      if (this._fpsInterval) {
-        if (this._lastTs) {
-          this._accum += ts - this._lastTs;
-          if (this._accum < this._fpsInterval) { this._lastTs = ts; return; }
-          this._accum = 0;
-        }
+      // Advance dash phase
+      const dt = 16; // assume ~60fps for simplicity; visually sufficient and cheap
+      this._lastDash += dt;
+
+      // Only redraw static layer (nodes/background) when needed
+      if (this._needsStaticRedraw) {
+        this._drawStatic();
+        this._needsStaticRedraw = false;
       }
-      this._lastTs = ts;
-      this._tick();
+      // Always draw edges (animated)
+      this._drawEdges();
     };
-    this._raf = requestAnimationFrame(loop);
+    this._raf = requestAnimationFrame(step);
   }
 
   _animStop() {
@@ -168,74 +210,147 @@ class FlowAnimCard extends HTMLElement {
     this._raf = null;
   }
 
-  _tick() {
-    const ctx = this._ctx;
+  _clear(fullClear = true) {
     const w = this.canvas.width / (window.devicePixelRatio || 1);
     const h = this.canvas.height / (window.devicePixelRatio || 1);
+    if (fullClear || (this._config.background && this._config.background !== "transparent")) {
+      if (this._config.background && this._config.background !== "transparent") {
+        this.ctx.fillStyle = this._config.background;
+        this.ctx.fillRect(0, 0, w, h);
+      } else {
+        this.ctx.clearRect(0, 0, w, h);
+      }
+    }
+    return { w, h };
+  }
 
-    // fade trail for "flow" look
-    ctx.globalCompositeOperation = 'source-over';
-    if (this._bg && this._bg !== 'transparent') {
-      ctx.fillStyle = this._bg;
-      ctx.fillRect(0, 0, w, h);
-    } else {
-      ctx.fillStyle = 'rgba(0,0,0,0)'; // transparent, but we still clear slightly to avoid buildup
-      ctx.clearRect(0, 0, w, h);
+  _layoutPos(node, w, h) {
+    return { x: node.x * w, y: node.y * h };
+  }
+
+  _drawStatic() {
+    const { w, h } = this._clear(true);
+    const ctx = this.ctx;
+    ctx.font = `12px ${this._config.font_family}`;
+
+    // Draw nodes (shapes + labels + values)
+    for (let i = 0; i < this._config.nodes.length; i++) {
+      const node = this._nodeMap.get(this._config.nodes[i].id);
+      if (!node) continue;
+      const p = this._layoutPos(node, w, h);
+
+      // Shape
+      ctx.save();
+      ctx.lineWidth = node.strokeWidth;
+      ctx.strokeStyle = node.stroke;
+      ctx.fillStyle = node.fill;
+
+      if (node.shape === "square") {
+        const s = node.size;
+        ctx.beginPath();
+        ctx.rect(p.x - s / 2, p.y - s / 2, s, s);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        const r = node.size / 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Text (label + value)
+      const val = this._hass ? this._readEntity(node.id) : { text: "" };
+      const label = node.label ?? node.id;
+      const unitFallback = node.unit ? ` ${node.unit}` : "";
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      // Label (top)
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.font = `bold ${Math.max(11, node.fontSize)}px ${this._config.font_family}`;
+      ctx.fillText(label, p.x, p.y - (node.size * 0.55));
+
+      // Value (centered inside)
+      ctx.fillStyle = node.color || "#ffffff";
+      ctx.font = `bold ${Math.max(11, node.fontSize)}px ${this._config.font_family}`;
+      const text = val.text || (this._values?.[i]?.text ?? "") || unitFallback.trim();
+      ctx.fillText(text, p.x, p.y);
+      ctx.restore();
+    }
+  }
+
+  _drawEdges() {
+    const { w, h } = { 
+      w: this.canvas.width / (window.devicePixelRatio || 1),
+      h: this.canvas.height / (window.devicePixelRatio || 1)
+    };
+    const ctx = this.ctx;
+
+    // Clear only the edge layer by redrawing a transparent rect over the whole canvas
+    // but keep nodes by redrawing nodes only when needed. To keep simple & fast,
+    // we redraw edges on top with composite clear for lines only:
+    // Instead, we fully redraw edges frame: cheap enough.
+    // First re-draw the background portion only if transparent to avoid trails:
+    if (this._config.background === "transparent") {
+      // Repaint static nodes: skip to save cost — but we already painted nodes in _drawStatic.
+      // So here, just clear a transparent rect then repaint static snapshot would be ideal.
+      // For simplicity: clear & repaint static occasionally
+      // We'll repaint static every ~20 frames
+      if ((this._lastDash / 16) % 20 === 0) {
+        this._needsStaticRedraw = true;
+        this._drawStatic();
+      }
     }
 
-    ctx.globalAlpha = 0.9;
-    ctx.lineWidth = this._lineWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    // Draw all links (animated dashed)
+    for (const link of this._links) {
+      const a = this._nodeMap.get(link.from);
+      const b = this._nodeMap.get(link.to);
+      if (!a || !b) continue;
+      const pa = this._layoutPos(a, w, h);
+      const pb = this._layoutPos(b, w, h);
 
-    // Draw & advance strands
-    for (let s of this._strands) {
-      const nx = s.x + s.vx;
-      const ny = s.y + s.vy;
+      ctx.save();
+      ctx.lineWidth = link.width;
+      ctx.strokeStyle = link.color;
+      const dash = Array.isArray(link.dash) ? link.dash : [8, 8];
+      ctx.setLineDash(dash);
+      // Animate dash offset
+      const totalDash = dash.reduce((s, v) => s + v, 0) || 1;
+      ctx.lineDashOffset = -((this._lastDash * (link.speed || 1)) % totalDash);
 
       ctx.beginPath();
-      ctx.moveTo(s.x, s.y);
-      ctx.lineTo(nx, ny);
-      ctx.strokeStyle = s.color;
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
       ctx.stroke();
 
-      s.x = nx;
-      s.y = ny;
-
-      // wrap around edges (no root node, endless flow)
-      if (s.x < 0) s.x = w;
-      if (s.x > w) s.x = 0;
-      if (s.y < 0) s.y = h;
-      if (s.y > h) s.y = 0;
-
-      // random tiny drift for organic feel
-      s.vx += (Math.random() - 0.5) * 0.02 * this._config.speed;
-      s.vy += (Math.random() - 0.5) * 0.02 * this._config.speed;
-
-      // normalize velocity to keep overall direction
-      const dir = this._directionVector();
-      const mag = Math.hypot(s.vx, s.vy) || 1;
-      const target = { x: dir.x * this._config.speed, y: dir.y * this._config.speed };
-      s.vx = s.vx * 0.9 + target.x * 0.1 * (1 + Math.random() * 0.2);
-      s.vy = s.vy * 0.9 + target.y * 0.1 * (1 + Math.random() * 0.2);
-
-      s.life--;
-      if (s.life <= 0) {
-        // respawn anywhere to avoid "root" behavior
-        s.x = Math.random() * w;
-        s.y = Math.random() * h;
-        s.life = 50 + Math.random() * 150;
+      // Optional arrowhead at end
+      if (link.arrow === "end") {
+        const ang = Math.atan2(pb.y - pa.y, pb.x - pa.x);
+        const size = Math.max(6, link.width * 3);
+        ctx.beginPath();
+        ctx.setLineDash([]); // solid arrow
+        ctx.moveTo(pb.x, pb.y);
+        ctx.lineTo(pb.x - Math.cos(ang - Math.PI / 6) * size, pb.y - Math.sin(ang - Math.PI / 6) * size);
+        ctx.moveTo(pb.x, pb.y);
+        ctx.lineTo(pb.x - Math.cos(ang + Math.PI / 6) * size, pb.y - Math.sin(ang + Math.PI / 6) * size);
+        ctx.stroke();
       }
+
+      ctx.restore();
     }
   }
 }
 
-customElements.define('flow-anim-card', FlowAnimCard);
+customElements.define("flow-network-card", FlowNetworkCard);
 
-// Lovelace registration signature:
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'flow-anim-card',
-  name: 'Flow Animation Card',
-  description: 'Simple, direction-controlled flow animation without root node.'
+  type: "flow-network-card",
+  name: "Flow Network Card",
+  description: "Nodes (circle/square) with animated connecting lines and HA entity values."
 });
