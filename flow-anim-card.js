@@ -119,20 +119,20 @@ class FlowNetworkCard extends HTMLElement {
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
     // links use NODE IDs; direction controlled by flow_entity
-    this._links = (this._config.links || [])
-      .map(l => ({
-        from: String(l.from || ""),
-        to: String(l.to || ""),
-        color: l.color || "rgba(255,255,255,0.85)",
-        width: Math.max(1, Number(l.width || 2)),
-        speed: Math.max(0.05, Number(l.speed || 0.8)),
-        curve: Number.isFinite(l.curve) ? Math.max(-0.35, Math.min(0.35, l.curve)) : 0,
-        flow_entity: l.flow_entity || l.entity || null,   // backwards compatible
-        zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
-        _t: 0,
-        _dir: 1
-      }))
-      .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
+	this._links = (this._config.links || [])
+	  .map(l => ({
+		from: String(l.from || ""),
+		to: String(l.to || ""),
+		color: l.color || "rgba(255,255,255,0.85)",
+		width: Math.max(1, Number(l.width || 2)),
+		speed: Math.max(0.05, Number(l.speed || 0.8)),
+		curve: Number.isFinite(l.curve) ? Math.max(-0.35, Math.min(0.35, l.curve)) : 0,
+		flow_entity: l.flow_entity || l.entity || null,
+		zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
+		_t: 0,
+		_dir: 0 // <--- vorher 1; jetzt default: keine Animation
+	  }))
+	  .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
   _applyAutoLayout(pxW, pxH) {
@@ -183,16 +183,17 @@ class FlowNetworkCard extends HTMLElement {
     return isNaN(num) ? NaN : num;
   }
 
-  _updateLinkDirections() {
-    if (!this._links) return;
-    for (const l of this._links) {
-      if (!l.flow_entity) { l._dir = 1; continue; }
-      const v = this._readNumber(l.flow_entity);
-      if (isNaN(v)) { l._dir = 1; continue; }
-      if (Math.abs(v) <= (l.zero_threshold ?? 0.0001)) l._dir = 0;
-      else l._dir = v > 0 ? 1 : -1;
-    }
-  }
+	_updateLinkDirections() {
+	  if (!this._links) return;
+	  for (const l of this._links) {
+		if (!l.flow_entity) { l._dir = 0; continue; } // <--- vorher 1; jetzt stoppen
+		const v = this._readNumber(l.flow_entity);
+		if (isNaN(v)) { l._dir = 0; continue; }       // unknown/unavailable => stoppen
+		if (Math.abs(v) <= (l.zero_threshold ?? 0.0001)) l._dir = 0;
+		else l._dir = v > 0 ? 1 : -1;
+	  }
+	}
+
 
   _resize() {
     const rect = this.wrapper.getBoundingClientRect();
