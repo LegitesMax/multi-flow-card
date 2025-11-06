@@ -1,0 +1,3 @@
+# Multi Flow Card
+
+Eine visuelle Flow-Karte für Home Assistant...
