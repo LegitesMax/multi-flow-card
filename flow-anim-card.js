@@ -293,20 +293,48 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   // ---------- geometry ----------
-  _edgePoint(from, to) {
-    const ax = from._px.x, ay = from._px.y;
-    const bx = to._px.x, by = to._px.y;
-    const dx = bx - ax, dy = by - ay;
-    if (from.shape === "circle") {
-      const r = from.size/2, len = Math.hypot(dx,dy) || 1;
-      return { x: ax + dx/len * r, y: ay + dy/len * r };
-    }
-    const hw = from.size/2, hh = from.size/2;
-    const sx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
-    const sy = dy !== 0 ? hh / Math.abs(dy) : Infinity;
-    const s = Math.min(sx, sy);
-    return { x: ax + dx * s, y: ay + dy * s };
+// Punkt auf dem Rand des Start-Knotens in Richtung des Ziel-Knotens
+_edgePoint(from, to) {
+  const ax = from._px.x, ay = from._px.y;
+  const bx = to._px.x,   by = to._px.y;
+  const dx = bx - ax,    dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len,   uy = dy / len; // Einheitsrichtung
+
+  if (from.shape === "circle") {
+    const r = from.size / 2;
+    return { x: ax + ux * r, y: ay + uy * r };
   }
+
+  const hw = from.size / 2;
+  const hh = from.size / 2;
+
+  if (from.shape === "rounded") {
+    // gleicher Radius wie beim Zeichnen verwenden
+    const radius = Math.min(14, hw);
+
+    // erst bis zum "Core"-Rechteck (Ecken weggeschnitten) gehen:
+    const coreW = Math.max(0, hw - radius);
+    const coreH = Math.max(0, hh - radius);
+
+    // Zeit bis zur Kollision mit dem Core-Rechteck in Richtung (ux,uy)
+    const tx = ux === 0 ? Infinity : coreW / Math.abs(ux);
+    const ty = uy === 0 ? Infinity : coreH / Math.abs(uy);
+    const tCore = Math.min(tx, ty);
+
+    // Danach noch den Eckradius entlang der Richtung addieren
+    const t = tCore + radius;
+
+    return { x: ax + ux * t, y: ay + uy * t };
+  }
+
+  // square (ohne Rundung): Standard-Box-Schnittpunkt
+  const sx = ux === 0 ? Infinity : hw / Math.abs(ux);
+  const sy = uy === 0 ? Infinity : hh / Math.abs(uy);
+  const t = Math.min(sx, sy);
+  return { x: ax + ux * t, y: ay + uy * t };
+}
+
 
   // ---------- icons ----------
   _ensureIconEl(key, iconName, color, size) {
