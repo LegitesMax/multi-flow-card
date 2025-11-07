@@ -1,21 +1,21 @@
 // flow-network-card.js
-// Flow Network Card (YAML-only, Auto-Size, no overlap for icon/value)
-//
-// - Icon zentriert via <ha-icon>, Wert automatisch unter Icon (ohne Überlappung)
-// - Auto height / auto sizing (Node/Icon/Font)
-// - Grid (row/col, grid: "r:c") oder auto-zentriert
-// - Link Fan-Out (keine überlappenden Linien)
+// Flow Network Card (YAML-only) – stabil + "half rows" (z.B. row: 2.5)
+// - Grid (row/col) oder auto-zentriert
+// - Halb-Zeilen für perfekte Mitte: row kann Dezimal sein (z.B. 2.5)
+// - Icon + Wert automatisch zentriert (kein Überlappen)
+// - Link-Fanout (keine Linien-Überlappungen)
 // - flow_entity: >0 vorwärts, <0 rückwärts, ~0 stop
-// - Rounded-edge intersection fix
-// - First-render preview fix
+// - Rounded-edge Fix + First-render Fix
 
 class FlowNetworkCard extends HTMLElement {
+  static getConfigElement(){ return null; } // YAML-only
+
   static getStubConfig() {
     return {
       background: "#14171a",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
-      value_offset_px: 8, // zusätzlicher Abstand unter dem Icon
+      value_offset_px: 8,
       layout: {
         mode: "auto",
         columns: 4,
@@ -33,8 +33,6 @@ class FlowNetworkCard extends HTMLElement {
     };
   }
 
-  static getConfigElement() { return null; } // YAML only
-
   setConfig(config) {
     this._config = {
       background: "transparent",
@@ -44,7 +42,7 @@ class FlowNetworkCard extends HTMLElement {
       value_offset_px: 8,
       layout: {
         mode: "auto",
-        columns: 3,
+        columns: 4,
         gap_x: 28,
         gap_y: 22,
         padding_x: 22,
@@ -82,6 +80,7 @@ class FlowNetworkCard extends HTMLElement {
 
       this._resizeObserver = new ResizeObserver(() => this._resize());
       this._resizeObserver.observe(this.wrapper);
+
       this._visible = true;
       document.addEventListener("visibilitychange", () => this._visible = document.visibilityState === "visible");
 
@@ -96,7 +95,7 @@ class FlowNetworkCard extends HTMLElement {
     this._resize();
     this._updateLinkDirections();
 
-    // Preview-Fix: nach erstem Render neu layouten, sobald Maße vorhanden
+    // First-render Fix
     if (!this._initializedFix) {
       this._initializedFix = true;
       setTimeout(() => {
@@ -120,16 +119,16 @@ class FlowNetworkCard extends HTMLElement {
     this._updateLinkDirections();
   }
 
-  getCardSize(){ return 3; }
   connectedCallback(){ this._animStart(); setTimeout(()=>this._resize(),150); }
   disconnectedCallback(){ this._animStop(); if (this._resizeObserver) this._resizeObserver.disconnect(); }
+  getCardSize(){ return 3; }
 
   // ---------- data ----------
   _prepare() {
     this._nodes = (this._config.nodes || []).map((n, i) => {
       let row = n.row, col = n.col;
       if (!row && !col && typeof n.grid === "string") {
-        const m = n.grid.trim().match(/^(\d+)\s*:\s*(\d+)$/);
+        const m = n.grid.trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+)$/);
         if (m) { row = Number(m[1]); col = Number(m[2]); }
       }
       const sizeSpecified = Number.isFinite(n.size);
@@ -141,16 +140,17 @@ class FlowNetworkCard extends HTMLElement {
         label: n.label || n.id,
         entity: n.entity || "",
         shape: (n.shape || "rounded").toLowerCase(),
-        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,  // auto wenn null
+        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,
         ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
         ringWidth: Math.max(2, Number(n.ringWidth || 3)),
         text_color: n.color || this._config.node_text_color,
-        fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null, // auto wenn null
-        x: null, y: null, order: n.order ?? i,
+        fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null,
+        order: n.order ?? i,
         icon: n.icon || null,
-        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,  // auto wenn null
+        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,
         icon_color: n.icon_color || "#ffffff",
-        row: Number.isFinite(row) ? Math.max(1, Math.floor(row)) : null,
+        // row darf Dezimal sein (z.B. 2.5)
+        row: (row !== undefined && row !== null) ? Number(row) : null,
         col: Number.isFinite(col) ? Math.max(1, Math.floor(col)) : null,
         _labelSide: "top",
         _auto: { size: !sizeSpecified, icon: !iconSpecified, font: !fontSpecified }
@@ -170,8 +170,7 @@ class FlowNetworkCard extends HTMLElement {
         autoCurve: (l.curve === undefined || l.curve === null),
         flow_entity: l.flow_entity || l.entity || null,
         zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
-        _t: 0,
-        _dir: 0
+        _t: 0, _dir: 0
       }))
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
@@ -185,78 +184,91 @@ class FlowNetworkCard extends HTMLElement {
     const padX = Number.isFinite(cfg.padding_x) ? cfg.padding_x : 16;
     const padY = Number.isFinite(cfg.padding_y) ? cfg.padding_y : 16;
     const minColW = Math.max(60, Number(cfg.min_col_width || 0));
-    const anyPinned = this._nodes.some(n => Number.isFinite(n.row) || Number.isFinite(n.col));
 
+    const anyPinned = this._nodes.some(n => n.row != null || n.col != null);
     const rowsAuto = Math.ceil(this._nodes.length / cols);
-    const rows = anyPinned
-      ? Math.max(this._nodes.reduce((m,n)=>Math.max(m, n.row||0), 0), rowsAuto)
-      : rowsAuto;
+    const maxPinnedRow = this._nodes.reduce((m,n)=> Math.max(m, n.row != null ? Math.ceil(Number(n.row)) : 0), 0);
+    const rows = anyPinned ? Math.max(maxPinnedRow, rowsAuto) : rowsAuto;
 
     const availW = Math.max(1, pxW - padX*2 - gapX*(cols-1));
-    const baseCellW = Math.max(availW / cols, minColW);
-
-    const cellW = baseCellW;
+    const cellW = Math.max(availW / cols, minColW);
     const cellH = cellW;
-    const totalH = padY*2 + rows*cellH + gapY*(rows-1);
 
-    const cw = cellW;
-    const ch = cellH;
-
-    const gridW = cols*cw + (cols-1)*gapX;
+    const gridW = cols*cellW + (cols-1)*gapX;
     const leftOffset = (pxW - gridW)/2;
-    const topOffset = (cfg.auto_height) ? padY : (pxH - (rows*ch + (rows-1)*gapY))/2;
+    const topOffset = padY;
 
-    return { cols, rows, gapX, gapY, padX, padY, cw, ch, leftOffset, topOffset, totalH: (rows*ch + (rows-1)*gapY + padY*2) };
+    return { cols, rows, gapX, gapY, padX, padY, cw: cellW, ch: cellH, leftOffset, topOffset,
+             totalH: rows*cellH + (rows-1)*gapY + padY*2 };
   }
 
   _applyAutoLayout(pxW, pxH) {
     const m = this._metrics(pxW, pxH);
     const cfg = this._config.layout || {};
     const cols = m.cols;
-    const anyPinned = this._nodes.some(n => Number.isFinite(n.row) || Number.isFinite(n.col));
+
+    const anyPinned = this._nodes.some(n => n.row != null || n.col != null);
+
+    const placeNode = (n, rFloat, cInt) => {
+      const cx = m.leftOffset + (cInt-1)*(m.cw+m.gapX) + m.cw/2;
+      const cy = m.topOffset  + (rFloat-1)*(m.ch+m.gapY) + m.ch/2;
+      n.x = this._clamp01(cx / pxW);
+      n.y = this._clamp01(cy / pxH);
+      this._autoScaleNode(n, m.cw);
+    };
 
     if (!anyPinned) {
       const n = this._nodes.length;
       const rows = Math.ceil(n / cols);
       this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((node, idx) => {
-        const r = Math.floor(idx / cols);
-        const leftInRow = Math.min(cols, (n - r*cols));
-        const rowWidth = leftInRow*m.cw + (leftInRow-1)*m.gapX;
-        const left = (pxW - rowWidth)/2;
-        const c = idx % cols;
-        const cx = left + c*(m.cw+m.gapX) + m.cw/2;
-        const cy = m.topOffset + r*(m.ch+m.gapY) + m.ch/2;
-        node.x = this._clamp01(cx / pxW);
-        node.y = this._clamp01(cy / pxH);
-        this._autoScaleNode(node, m.cw);
+        const r = Math.floor(idx / cols) + 1;
+        const c = (idx % cols) + 1;
+        placeNode(node, r, c);
       });
     } else {
+      // Grid mit Integer-Row/Col + separate Behandlung für Dezimal-Row
       const rows = m.rows;
       const grid = Array.from({length: rows}, ()=> Array.from({length: cols}, ()=> null));
+      const floatPinned = [];
       const free = [];
-      const byOrder = [...this._nodes].sort((a,b)=>(a.order??0)-(b.order??0));
 
+      const byOrder = [...this._nodes].sort((a,b)=>(a.order??0)-(b.order??0));
       for (const n of byOrder) {
-        if (Number.isFinite(n.row) || Number.isFinite(n.col)) {
-          const r = Math.max(1, Math.min(rows, n.row || 1)) - 1;
-          const c = Math.max(1, Math.min(cols, n.col || 1)) - 1;
-          if (!grid[r][c]) grid[r][c] = n; else free.push(n);
-        } else free.push(n);
-      }
-      for (let r=0;r<rows;r++){
-        for (let c=0;c<cols;c++){
-          if (!grid[r][c] && free.length) grid[r][c] = free.shift();
+        const hasRow = n.row != null;
+        const hasCol = n.col != null;
+        if (hasRow || hasCol) {
+          const r = hasRow ? Number(n.row) : 1;
+          const c = hasCol ? Math.max(1, Math.min(cols, Math.floor(n.col))) : 1;
+          if (Number.isInteger(r)) {
+            const ri = Math.max(1, Math.min(rows, r));
+            if (!grid[ri-1][c-1]) grid[ri-1][c-1] = n; else free.push(n);
+          } else {
+            // Dezimal-Row -> später exakt auf r platzieren
+            n._rowFloat = Math.max(1, Math.min(rows, r));
+            n._colInt   = c;
+            floatPinned.push(n);
+          }
+        } else {
+          free.push(n);
         }
       }
-      for (let r=0;r<rows;r++){
-        for (let c=0;c<cols;c++){
-          const n = grid[r][c]; if (!n) continue;
-          const cx = m.leftOffset + c*(m.cw+m.gapX) + m.cw/2;
-          const cy = m.topOffset  + r*(m.ch+m.gapY) + m.ch/2;
-          n.x = this._clamp01(cx / pxW);
-          n.y = this._clamp01(cy / pxH);
-          this._autoScaleNode(n, m.cw);
+      // freie Plätze füllen
+      for (let r=1;r<=rows;r++) {
+        for (let c=1;c<=cols;c++) {
+          if (!grid[r-1][c-1] && free.length) grid[r-1][c-1] = free.shift();
         }
+      }
+      // Integer-Grid positionieren
+      for (let r=1;r<=rows;r++) {
+        for (let c=1;c<=cols;c++) {
+          const n = grid[r-1][c-1]; if (!n) continue;
+          if (n._rowFloat) continue; // wird gleich als float gesetzt
+          placeNode(n, r, c);
+        }
+      }
+      // Float-Row platzieren (z.B. 2.5)
+      for (const n of floatPinned) {
+        placeNode(n, n._rowFloat, n._colInt);
       }
     }
 
@@ -305,13 +317,13 @@ class FlowNetworkCard extends HTMLElement {
         const v = this._readNumber(l.flow_entity);
         if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) { l._dir = 0; continue; }
         l._dir = v > 0 ? 1 : -1;
-        continue;
+      } else if (missing === "stop") {
+        l._dir = 0;
+      } else {
+        const fromNode = this._nodeMap.get(l.from);
+        const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
+        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0.0001)) ? 1 : 0;
       }
-      if (missing === "stop") { l._dir = 0; continue; }
-      const fromNode = this._nodeMap.get(l.from);
-      const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
-      if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) l._dir = 0;
-      else l._dir = 1;
     }
   }
 
@@ -419,6 +431,7 @@ class FlowNetworkCard extends HTMLElement {
 
     for (const n of this._nodes) n._px = { x: n.x * w, y: n.y * h };
 
+    // Fanout-Cache zurücksetzen
     this._fanCache = null;
 
     for (const l of this._links) {
@@ -435,6 +448,7 @@ class FlowNetworkCard extends HTMLElement {
 
       let curve = l.curve || 0;
 
+      // Auto Fan-Out
       if (this._config.link_fan_out?.enabled && l.autoCurve) {
         if (!this._fanCache) this._fanCache = new Map();
         const keyBase = `${a.id}->${b.id}`;
@@ -486,7 +500,7 @@ class FlowNetworkCard extends HTMLElement {
     // Fill
     ctx.save(); ctx.fillStyle = n.fill; this._fillShape(ctx, n.shape, p.x, p.y, r, n.size); ctx.restore();
 
-    // Label (außerhalb, oben/unten je nach Linienrichtung)
+    // Label (außen)
     const above = (n._labelSide === "top");
     const labelY = above ? (p.y - r - 8) : (p.y + r + 8);
     const baseline = above ? "bottom" : "top";
@@ -494,16 +508,12 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // --- ICON: mittig über <ha-icon> (bereits positioniert in _positionIcons) ---
-
-    // --- VALUE: sicher unter dem Icon, ohne Überlappung ---
+    // Value unter Icon – ohne Überlappung
     const v = this._readEntityValue(n.entity);
     const iconH = n.icon ? (n.icon_size || 24) : 0;
     const iconBottomY = p.y + iconH/2;
     const extra = Math.max(6, this._config.value_offset_px || 8, Math.round(n.size * 0.06));
     let valueY = iconBottomY + extra;
-
-    // am Node-Rand abfangen (innen 6px Puffer)
     const innerBottom = p.y + r - 6;
     if (valueY > innerBottom) valueY = innerBottom;
 
@@ -514,6 +524,8 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${Math.max(12, n.fontSize || 14)}px ${this._config.font_family}`;
     ctx.fillText(v.text, p.x, valueY);
     ctx.restore();
+
+    // Icon (zentriert) – via ha-icon in _positionIcons()
   }
 
   _strokeShape(ctx, shape, cx, cy, r, size) {
@@ -592,7 +604,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (Auto Size, No Overlap)",
-  description: "Neon nodes, centered icon/value, auto-size layout, no-overlap fan-out, entity-driven flow.",
+  name: "Flow Network Card",
+  description: "Neon nodes with smooth dot, grid or centered layout, half-row support.",
   preview: true
 });
