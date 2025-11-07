@@ -1,10 +1,11 @@
 // flow-network-card.js
 // Flow Network Card (YAML-only)
-// - No visual editor (pure YAML)
 // - Friendly node IDs + separate sensor entity
 // - Optional grid placement per node: row/col or "grid: 'r:c'"
-// - If no row/col given anywhere -> auto-centered layout per row
+// - Auto-centered layout when no grid is used
 // - Per-link flow_entity controls direction/stop (>0 fwd, <0 rev, ~0 stop)
+// - FIX: rounded-shape edge intersection
+// - FIX: first-time preview misplacement (delayed initial resize)
 
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
@@ -29,7 +30,7 @@ class FlowNetworkCard extends HTMLElement {
     };
   }
 
-  // No visual editor:
+  // YAML-only (kein visueller Editor)
   static getConfigElement() { return null; }
 
   setConfig(config) {
@@ -84,32 +85,24 @@ class FlowNetworkCard extends HTMLElement {
     this._prepare();
     this._resize();
     this._updateLinkDirections();
-	
-	// --- Fix: handle first-time preview misplacement ---
-	if (!this._initializedFix) {
-	  this._initializedFix = true;
-	  setTimeout(() => {
-		// Warte bis Home Assistant den Card-Container gerendert hat
-		const rect = this.wrapper?.getBoundingClientRect?.();
-		if (rect && rect.width > 0 && rect.height > 0) {
-		  this._resize();
-		} else {
-		  // Wenn immer noch 0 (z. B. weil Tab noch unsichtbar): Warte erneut
-		  const waitForVisible = () => {
-			const r = this.wrapper?.getBoundingClientRect?.();
-			if (r && r.width > 0 && r.height > 0) {
-			  this._resize();
-			} else {
-			  requestAnimationFrame(waitForVisible);
-			}
-		  };
-		  requestAnimationFrame(waitForVisible);
-		}
-	  }, 50); // 50ms reicht für alle gängigen Browser/HA-Versionen
-	}
-	this._prepare();
-	this._resize();
-	this._updateLinkDirections();
+
+    // ---- FIX: first-time preview misplacement (delayed initial resize) ----
+    if (!this._initializedFix) {
+      this._initializedFix = true;
+      setTimeout(() => {
+        const rect = this.wrapper?.getBoundingClientRect?.();
+        if (rect && rect.width > 0 && rect.height > 0) {
+          this._resize();
+        } else {
+          const waitForVisible = () => {
+            const r = this.wrapper?.getBoundingClientRect?.();
+            if (r && r.width > 0 && r.height > 0) this._resize();
+            else requestAnimationFrame(waitForVisible);
+          };
+          requestAnimationFrame(waitForVisible);
+        }
+      }, 50);
+    }
   }
 
   set hass(hass) {
@@ -119,10 +112,11 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   getCardSize() { return Math.ceil((this._config.height || 320) / 50); }
-  connectedCallback() {
-	  this._animStart();
-	  setTimeout(() => this._resize(), 150);
-	}
+  connectedCallback(){
+    this._animStart();
+    // Bonus-Schutz bei späten Einblendungen (z. B. Tab-Wechsel)
+    setTimeout(() => this._resize(), 150);
+  }
   disconnectedCallback(){ this._animStop(); if (this._resizeObserver) this._resizeObserver.disconnect(); }
 
   // ---------- data ----------
@@ -188,7 +182,7 @@ class FlowNetworkCard extends HTMLElement {
     const baseCellW = (pxW - pad*2 - gap*(cols-1)) / cols;
 
     if (!anyPinned) {
-      // previous behavior: per-row centering
+      // auto: per-row centered
       const n = this._nodes.length;
       const rows = estRows;
       const cellW = baseCellW;
@@ -212,44 +206,41 @@ class FlowNetworkCard extends HTMLElement {
       return;
     }
 
-    // GRID MODE (some nodes pinned with row/col)
-    // rows = max(specified row, ceil(n/cols))
-    const maxPinnedRow = this._nodes.reduce((m,n)=>Math.max(m, n.row||0), 0);
-    const rows = Math.max(maxPinnedRow, estRows);
-
+    // GRID MODE
+    const rows = Math.max(
+      this._nodes.reduce((m,n)=>Math.max(m, n.row||0), 0),
+      estRows
+    );
     const cellW = baseCellW;
     const cellH = cellW;
     const totalH = pad*2 + rows*cellH + gap*(rows-1);
     const scale = totalH > pxH ? (pxH - pad*2 - gap*(rows-1)) / (rows * cellH) : 1;
     const cw = cellW * scale, ch = cellH * scale;
 
-    // build occupancy grid
-    const grid = Array.from({length: rows}, ()=> Array.from({length: cols}, ()=> null));
+    const colsCount = Math.max(1, Math.floor(cfg.columns || 3));
+    const grid = Array.from({length: rows}, ()=> Array.from({length: colsCount}, ()=> null));
 
-    // place pinned nodes (clamped to grid)
     const free = [];
     const byOrder = [...this._nodes].sort((a,b)=>(a.order??0)-(b.order??0));
     for (const n of byOrder) {
       if (Number.isFinite(n.row) || Number.isFinite(n.col)) {
         const r = Math.max(1, Math.min(rows, n.row || 1)) - 1;
-        const c = Math.max(1, Math.min(cols, n.col || 1)) - 1;
-        if (!grid[r][c]) grid[r][c] = n; else free.push(n); // collision -> treat as free
+        const c = Math.max(1, Math.min(colsCount, n.col || 1)) - 1;
+        if (!grid[r][c]) grid[r][c] = n; else free.push(n);
       } else free.push(n);
     }
-    // fill remaining cells row-major
     for (let r=0;r<rows;r++){
-      for (let c=0;c<cols;c++){
+      for (let c=0;c<colsCount;c++){
         if (!grid[r][c] && free.length) grid[r][c] = free.shift();
       }
     }
 
-    // draw positions for fixed grid (whole grid centered)
-    const gridWidth = cols*cw + (cols-1)*gap;
+    const gridWidth = colsCount*cw + (colsCount-1)*gap;
     const leftOffset = (pxW - gridWidth)/2;
     const topOffset = (pxH - (rows*ch + (rows-1)*gap))/2;
 
     for (let r=0;r<rows;r++){
-      for (let c=0;c<cols;c++){
+      for (let c=0;c<colsCount;c++){
         const n = grid[r][c]; if (!n) continue;
         const cx = leftOffset + c*(cw+gap) + cw/2;
         const cy = topOffset + r*(ch+gap) + ch/2;
@@ -290,7 +281,6 @@ class FlowNetworkCard extends HTMLElement {
         l._dir = v > 0 ? 1 : -1;
         continue;
       }
-      // no flow_entity
       if (missing === "stop") { l._dir = 0; continue; }
       const fromNode = this._nodeMap.get(l.from);
       const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
@@ -322,48 +312,39 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   // ---------- geometry ----------
-// Punkt auf dem Rand des Start-Knotens in Richtung des Ziel-Knotens
-_edgePoint(from, to) {
-  const ax = from._px.x, ay = from._px.y;
-  const bx = to._px.x,   by = to._px.y;
-  const dx = bx - ax,    dy = by - ay;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len,   uy = dy / len; // Einheitsrichtung
+  // FIXED: edge intersection for rounded shapes
+  _edgePoint(from, to) {
+    const ax = from._px.x, ay = from._px.y;
+    const bx = to._px.x, by = to._px.y;
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
 
-  if (from.shape === "circle") {
-    const r = from.size / 2;
-    return { x: ax + ux * r, y: ay + uy * r };
-  }
+    if (from.shape === "circle") {
+      const r = from.size / 2;
+      return { x: ax + ux * r, y: ay + uy * r };
+    }
 
-  const hw = from.size / 2;
-  const hh = from.size / 2;
+    const hw = from.size / 2;
+    const hh = from.size / 2;
 
-  if (from.shape === "rounded") {
-    // gleicher Radius wie beim Zeichnen verwenden
-    const radius = Math.min(14, hw);
+    if (from.shape === "rounded") {
+      const radius = Math.min(14, hw);
+      const coreW = Math.max(0, hw - radius);
+      const coreH = Math.max(0, hh - radius);
+      const tx = ux === 0 ? Infinity : coreW / Math.abs(ux);
+      const ty = uy === 0 ? Infinity : coreH / Math.abs(uy);
+      const tCore = Math.min(tx, ty);
+      const t = tCore + radius; // step into the rounded corner
+      return { x: ax + ux * t, y: ay + uy * t };
+    }
 
-    // erst bis zum "Core"-Rechteck (Ecken weggeschnitten) gehen:
-    const coreW = Math.max(0, hw - radius);
-    const coreH = Math.max(0, hh - radius);
-
-    // Zeit bis zur Kollision mit dem Core-Rechteck in Richtung (ux,uy)
-    const tx = ux === 0 ? Infinity : coreW / Math.abs(ux);
-    const ty = uy === 0 ? Infinity : coreH / Math.abs(uy);
-    const tCore = Math.min(tx, ty);
-
-    // Danach noch den Eckradius entlang der Richtung addieren
-    const t = tCore + radius;
-
+    // square
+    const sx = ux === 0 ? Infinity : hw / Math.abs(ux);
+    const sy = uy === 0 ? Infinity : hh / Math.abs(uy);
+    const t = Math.min(sx, sy);
     return { x: ax + ux * t, y: ay + uy * t };
   }
-
-  // square (ohne Rundung): Standard-Box-Schnittpunkt
-  const sx = ux === 0 ? Infinity : hw / Math.abs(ux);
-  const sy = uy === 0 ? Infinity : hh / Math.abs(uy);
-  const t = Math.min(sx, sy);
-  return { x: ax + ux * t, y: ay + uy * t };
-}
-
 
   // ---------- icons ----------
   _ensureIconEl(key, iconName, color, size) {
@@ -444,7 +425,7 @@ _edgePoint(from, to) {
   _drawNode(ctx, n) {
     const p = n._px, r = n.size/2;
 
-    // ring
+    // neon ring
     ctx.save(); ctx.shadowColor = n.ring; ctx.shadowBlur = 18; ctx.lineWidth = n.ringWidth; ctx.strokeStyle = n.ring;
     this._strokeShape(ctx, n.shape, p.x, p.y, r, n.size); ctx.restore();
 
