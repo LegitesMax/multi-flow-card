@@ -1,70 +1,50 @@
 // flow-network-card.js
-// Flow Network Card (YAML-only, Auto-Size + Link Fan-Out)
+// Flow Network Card (YAML-only, Auto-Size, no overlap for icon/value)
 //
-// Features:
-// - Auto height (layout.auto_height) -> passt Kartenhöhe an Reihen an
-// - Auto sizing der Nodes/Icon/Schriften auf Basis der Cell-Größe
-// - Grid (row/col oder grid: "r:c") ODER auto-zentriertes Layout
-// - Per-Link flow_entity: >0 vorwärts, <0 rückwärts, ~0 stop
-// - Abgerundete Kanten korrekt getroffen (rounded shape fix)
-// - Erst-Render-Preview fix (verzögertes Initial-Resize)
-// - Automatisches Fächern paralleler Verbindungen (link_fan_out)
+// - Icon zentriert via <ha-icon>, Wert automatisch unter Icon (ohne Überlappung)
+// - Auto height / auto sizing (Node/Icon/Font)
+// - Grid (row/col, grid: "r:c") oder auto-zentriert
+// - Link Fan-Out (keine überlappenden Linien)
+// - flow_entity: >0 vorwärts, <0 rückwärts, ~0 stop
+// - Rounded-edge intersection fix
+// - First-render preview fix
 
 class FlowNetworkCard extends HTMLElement {
   static getStubConfig() {
     return {
-      height: 360,
       background: "#14171a",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
+      value_offset_px: 8, // zusätzlicher Abstand unter dem Icon
       layout: {
         mode: "auto",
         columns: 4,
-        gap_x: 28,
-        gap_y: 22,
-        padding_x: 22,
-        padding_y: 18,
-        min_col_width: 140,
-        auto_height: true        // << auto Höhe
+        gap_x: 38,
+        gap_y: 26,
+        padding_x: 26,
+        padding_y: 20,
+        min_col_width: 150,
+        auto_height: true
       },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
       link_fan_out: { enabled: true, strength: 0.12 },
-      nodes: [
-        { id: "pv1", label: "PV 1", entity: "sensor.pv1_power", shape: "rounded", ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-panel", icon_color: "#baffea" },
-        { id: "pv2", label: "PV 2", entity: "sensor.pv2_power", shape: "rounded", ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-panel", icon_color: "#baffea" },
-        { id: "pv3", label: "PV 3", entity: "sensor.pv3_power", shape: "rounded", ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-panel", icon_color: "#baffea" },
-        { id: "pv4", label: "PV 4", entity: "sensor.pv4_power", shape: "rounded", ring: "#7cffcb", fill: "#0f2a22", icon: "mdi:solar-panel", icon_color: "#baffea" },
-        { id: "batt", label: "Batterie", entity: "sensor.battery_power", shape: "rounded", ring: "#ff6b6b", fill: "#2a1f22", icon: "mdi:battery-high", icon_color: "#ffc2c2" },
-        { id: "home", label: "Zuhause",  entity: "sensor.house_power",   shape: "rounded", ring: "#23b0ff", fill: "#0f1a22", icon: "mdi:home-variant", icon_color: "#99dbff" },
-        { id: "floor1", label: "EG",  entity: "sensor.floor1_power", shape: "rounded", ring: "#ffd166", fill: "#2b2614", icon: "mdi:floor-plan", icon_color: "#ffe39a" },
-        { id: "floor2", label: "OG 1",entity: "sensor.floor2_power", shape: "rounded", ring: "#ffd166", fill: "#2b2614", icon: "mdi:floor-plan", icon_color: "#ffe39a" },
-        { id: "floor3", label: "OG 2",entity: "sensor.floor3_power", shape: "rounded", ring: "#ffd166", fill: "#2b2614", icon: "mdi:floor-plan", icon_color: "#ffe39a" }
-      ],
-      links: [
-        { from: "pv1", to: "batt", color: "#7cffcb", width: 2, speed: 0.9, flow_entity: "sensor.pv1_to_batt_kw", zero_threshold: 0.01 },
-        { from: "pv2", to: "batt", color: "#7cffcb", width: 2, speed: 0.9, flow_entity: "sensor.pv2_to_batt_kw", zero_threshold: 0.01 },
-        { from: "pv3", to: "batt", color: "#7cffcb", width: 2, speed: 0.9, flow_entity: "sensor.pv3_to_batt_kw", zero_threshold: 0.01 },
-        { from: "pv4", to: "batt", color: "#7cffcb", width: 2, speed: 0.9, flow_entity: "sensor.pv4_to_batt_kw", zero_threshold: 0.01 },
-        { from: "batt", to: "home", color: "#ff6b6b", width: 2, speed: 0.85, flow_entity: "sensor.batt_to_home_kw", zero_threshold: 0.01 },
-        { from: "home", to: "floor1", color: "#ffd166", width: 2, speed: 0.8, flow_entity: "sensor.home_to_floor1_kw", zero_threshold: 0.01 },
-        { from: "home", to: "floor2", color: "#ffd166", width: 2, speed: 0.8, flow_entity: "sensor.home_to_floor2_kw", zero_threshold: 0.01 },
-        { from: "home", to: "floor3", color: "#ffd166", width: 2, speed: 0.8, flow_entity: "sensor.home_to_floor3_kw", zero_threshold: 0.01 }
-      ]
+      nodes: [],
+      links: []
     };
   }
 
-  static getConfigElement(){ return null; } // YAML only
+  static getConfigElement() { return null; } // YAML only
 
   setConfig(config) {
     this._config = {
-      height: 360,
       background: "transparent",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
       node_text_color: "rgba(255,255,255,0.92)",
+      value_offset_px: 8,
       layout: {
         mode: "auto",
-        columns: 4,
+        columns: 3,
         gap_x: 28,
         gap_y: 22,
         padding_x: 22,
@@ -73,7 +53,6 @@ class FlowNetworkCard extends HTMLElement {
         auto_height: true
       },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
-      value_below_icon_factor: 0.65,
       missing_behavior: "stop",
       link_fan_out: { enabled: true, strength: 0.12 },
       ...config
@@ -85,7 +64,7 @@ class FlowNetworkCard extends HTMLElement {
       this.card.style.overflow = "hidden";
 
       this.wrapper = document.createElement("div");
-      Object.assign(this.wrapper.style, { position: "relative", width: "100%", height: (this._config.height || 360) + "px" });
+      Object.assign(this.wrapper.style, { position: "relative", width: "100%", height: "360px" });
 
       this.bg = document.createElement("canvas");
       this.fg = document.createElement("canvas");
@@ -112,15 +91,12 @@ class FlowNetworkCard extends HTMLElement {
     }
 
     this.card.style.background = this._config.background || "transparent";
-    if (!this._config.layout?.auto_height && this._config.height) {
-      this.wrapper.style.height = this._config.height + "px";
-    }
 
     this._prepare();
     this._resize();
     this._updateLinkDirections();
 
-    // Preview-Glitch Fix (erst messen, dann layouten)
+    // Preview-Fix: nach erstem Render neu layouten, sobald Maße vorhanden
     if (!this._initializedFix) {
       this._initializedFix = true;
       setTimeout(() => {
@@ -144,7 +120,7 @@ class FlowNetworkCard extends HTMLElement {
     this._updateLinkDirections();
   }
 
-  getCardSize(){ return Math.ceil(((this._config.height || 360))/50); }
+  getCardSize(){ return 3; }
   connectedCallback(){ this._animStart(); setTimeout(()=>this._resize(),150); }
   disconnectedCallback(){ this._animStop(); if (this._resizeObserver) this._resizeObserver.disconnect(); }
 
@@ -165,14 +141,12 @@ class FlowNetworkCard extends HTMLElement {
         label: n.label || n.id,
         entity: n.entity || "",
         shape: (n.shape || "rounded").toLowerCase(),
-        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,  // auto, wenn null
+        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,  // auto wenn null
         ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
         ringWidth: Math.max(2, Number(n.ringWidth || 3)),
         text_color: n.color || this._config.node_text_color,
         fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null, // auto wenn null
-        x: (this._config.layout?.mode === "manual" && typeof n.x === "number") ? this._clamp01(n.x) : null,
-        y: (this._config.layout?.mode === "manual" && typeof n.y === "number") ? this._clamp01(n.y) : null,
-        order: n.order ?? i,
+        x: null, y: null, order: n.order ?? i,
         icon: n.icon || null,
         icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,  // auto wenn null
         icon_color: n.icon_color || "#ffffff",
@@ -193,7 +167,7 @@ class FlowNetworkCard extends HTMLElement {
         width: Math.max(1, Number(l.width || 2)),
         speed: Math.max(0.05, Number(l.speed || 0.8)),
         curve: (l.curve === undefined || l.curve === null) ? 0 : Number(l.curve),
-        autoCurve: (l.curve === undefined || l.curve === null), // für Fan-Out
+        autoCurve: (l.curve === undefined || l.curve === null),
         flow_entity: l.flow_entity || l.entity || null,
         zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
         _t: 0,
@@ -202,7 +176,7 @@ class FlowNetworkCard extends HTMLElement {
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
-  // ---------- layout helpers ----------
+  // ---------- layout ----------
   _metrics(pxW, pxH) {
     const cfg = this._config.layout || {};
     const cols = Math.max(1, Math.floor(cfg.columns || 3));
@@ -221,22 +195,16 @@ class FlowNetworkCard extends HTMLElement {
     const availW = Math.max(1, pxW - padX*2 - gapX*(cols-1));
     const baseCellW = Math.max(availW / cols, minColW);
 
-    // quadratische Zelle; ggf. auf Höhe skalieren
     const cellW = baseCellW;
     const cellH = cellW;
     const totalH = padY*2 + rows*cellH + gapY*(rows-1);
-    const scale = (totalH > pxH && !this._config.layout.auto_height)
-      ? (pxH - padY*2 - gapY*(rows-1)) / (rows * cellH)
-      : 1;
 
-    const cw = cellW * scale;
-    const ch = cellH * scale;
+    const cw = cellW;
+    const ch = cellH;
 
     const gridW = cols*cw + (cols-1)*gapX;
     const leftOffset = (pxW - gridW)/2;
-    const topOffset = (this._config.layout.auto_height)
-      ? padY
-      : (pxH - (rows*ch + (rows-1)*gapY))/2;
+    const topOffset = (cfg.auto_height) ? padY : (pxH - (rows*ch + (rows-1)*gapY))/2;
 
     return { cols, rows, gapX, gapY, padX, padY, cw, ch, leftOffset, topOffset, totalH: (rows*ch + (rows-1)*gapY + padY*2) };
   }
@@ -245,13 +213,11 @@ class FlowNetworkCard extends HTMLElement {
     const m = this._metrics(pxW, pxH);
     const cfg = this._config.layout || {};
     const cols = m.cols;
-
     const anyPinned = this._nodes.some(n => Number.isFinite(n.row) || Number.isFinite(n.col));
 
     if (!anyPinned) {
       const n = this._nodes.length;
       const rows = Math.ceil(n / cols);
-
       this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((node, idx) => {
         const r = Math.floor(idx / cols);
         const leftInRow = Math.min(cols, (n - r*cols));
@@ -294,22 +260,17 @@ class FlowNetworkCard extends HTMLElement {
       }
     }
 
-    // Auto-Height → Wrapper-Höhe setzen
     if (cfg.auto_height) {
-      const totalH = m.totalH;
-      this.wrapper.style.height = Math.round(totalH) + "px";
-      // Canvas wird im _resize() gesetzt, das gleich folgt
+      this.wrapper.style.height = Math.round(m.totalH) + "px";
     }
   }
 
   _autoScaleNode(n, cellW) {
-    // automatische Node/Icon/Font Größen (wenn nicht explizit gesetzt)
     const nodeSize = Math.round(Math.max(56, Math.min(120, (n._auto.size ? cellW * 0.70 : n.size))));
     n.size = nodeSize;
 
     if (n._auto.icon) {
-      n.icon_size = Math.round(nodeSize * 0.38);
-      n.icon_size = Math.max(16, Math.min(64, n.icon_size));
+      n.icon_size = Math.max(16, Math.min(64, Math.round(nodeSize * 0.38)));
     }
     if (n._auto.font) {
       n.fontSize = Math.round(Math.max(12, Math.min(18, nodeSize * 0.18)));
@@ -318,7 +279,6 @@ class FlowNetworkCard extends HTMLElement {
 
   // ---------- utils ----------
   _clamp01(v){ return Math.max(0, Math.min(1, Number(v))); }
-
   _getState(id) { return this._hass?.states?.[id]; }
   _readEntityValue(entityId) {
     if (!this._hass || !entityId) return { raw: null, text: "" };
@@ -359,12 +319,12 @@ class FlowNetworkCard extends HTMLElement {
     const rect = this.wrapper.getBoundingClientRect();
     const dpr = Math.max(1, window.devicePixelRatio || 1);
 
-    // Bei auto_height kann sich wrapper-Höhe ändern → erst Layout anwenden
     this._applyAutoLayout(rect.width, rect.height);
 
+    const newRect = this.wrapper.getBoundingClientRect();
     for (const c of [this.bg, this.fg]) {
-      c.width  = Math.max(1, Math.floor(rect.width * dpr));
-      c.height = Math.max(1, Math.floor(this.wrapper.getBoundingClientRect().height * dpr));
+      c.width  = Math.max(1, Math.floor(newRect.width * dpr));
+      c.height = Math.max(1, Math.floor(newRect.height * dpr));
       const ctx = (c === this.bg ? this.bgCtx : this.fgCtx);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
@@ -398,7 +358,6 @@ class FlowNetworkCard extends HTMLElement {
       return { x: ax + ux * t, y: ay + uy * t };
     }
 
-    // square
     const sx = ux === 0 ? Infinity : hw / Math.abs(ux);
     const sy = uy === 0 ? Infinity : hh / Math.abs(uy);
     const t = Math.min(sx, sy);
@@ -416,8 +375,8 @@ class FlowNetworkCard extends HTMLElement {
     }
     el.setAttribute("icon", iconName);
     el.style.color = color;
-    el.style.width = size + "px";
-    el.style.height = size + "px";
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
     return el;
   }
   _positionIcons() {
@@ -426,8 +385,8 @@ class FlowNetworkCard extends HTMLElement {
       if (!n.icon) continue;
       const px = { x: n.x * rect.width, y: n.y * rect.height };
       const el = this._ensureIconEl(n.id, n.icon, n.icon_color || "#fff", n.icon_size || 24);
-      el.style.left = px.x + "px";
-      el.style.top  = px.y + "px";
+      el.style.left = `${px.x}px`;
+      el.style.top  = `${px.y}px`;
     }
   }
 
@@ -460,7 +419,6 @@ class FlowNetworkCard extends HTMLElement {
 
     for (const n of this._nodes) n._px = { x: n.x * w, y: n.y * h };
 
-    // Fan-Out Cache zurücksetzen
     this._fanCache = null;
 
     for (const l of this._links) {
@@ -477,7 +435,6 @@ class FlowNetworkCard extends HTMLElement {
 
       let curve = l.curve || 0;
 
-      // Auto Fan-Out (nur wenn keine manuelle Kurve)
       if (this._config.link_fan_out?.enabled && l.autoCurve) {
         if (!this._fanCache) this._fanCache = new Map();
         const keyBase = `${a.id}->${b.id}`;
@@ -522,14 +479,14 @@ class FlowNetworkCard extends HTMLElement {
   _drawNode(ctx, n) {
     const p = n._px, r = n.size/2;
 
-    // ring
+    // Ring
     ctx.save(); ctx.shadowColor = n.ring; ctx.shadowBlur = 18; ctx.lineWidth = n.ringWidth; ctx.strokeStyle = n.ring;
     this._strokeShape(ctx, n.shape, p.x, p.y, r, n.size); ctx.restore();
 
-    // fill
+    // Fill
     ctx.save(); ctx.fillStyle = n.fill; this._fillShape(ctx, n.shape, p.x, p.y, r, n.size); ctx.restore();
 
-    // label
+    // Label (außerhalb, oben/unten je nach Linienrichtung)
     const above = (n._labelSide === "top");
     const labelY = above ? (p.y - r - 8) : (p.y + r + 8);
     const baseline = above ? "bottom" : "top";
@@ -537,13 +494,26 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // value unter Icon
+    // --- ICON: mittig über <ha-icon> (bereits positioniert in _positionIcons) ---
+
+    // --- VALUE: sicher unter dem Icon, ohne Überlappung ---
     const v = this._readEntityValue(n.entity);
-    const k = Math.max(0.45, Number(this._config.value_below_icon_factor) || 0.65);
-    const valueY = p.y + (n.icon ? (n.icon_size || 24) * k : 0);
-    ctx.save(); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = n.text_color;
+    const iconH = n.icon ? (n.icon_size || 24) : 0;
+    const iconBottomY = p.y + iconH/2;
+    const extra = Math.max(6, this._config.value_offset_px || 8, Math.round(n.size * 0.06));
+    let valueY = iconBottomY + extra;
+
+    // am Node-Rand abfangen (innen 6px Puffer)
+    const innerBottom = p.y + r - 6;
+    if (valueY > innerBottom) valueY = innerBottom;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = n.text_color;
     ctx.font = `bold ${Math.max(12, n.fontSize || 14)}px ${this._config.font_family}`;
-    ctx.fillText(v.text, p.x, valueY); ctx.restore();
+    ctx.fillText(v.text, p.x, valueY);
+    ctx.restore();
   }
 
   _strokeShape(ctx, shape, cx, cy, r, size) {
@@ -622,7 +592,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (Auto Size)",
-  description: "Neon nodes, static lines + smooth dot; auto-size layout; grid or centered; entity-driven direction.",
+  name: "Flow Network Card (Auto Size, No Overlap)",
+  description: "Neon nodes, centered icon/value, auto-size layout, no-overlap fan-out, entity-driven flow.",
   preview: true
 });
