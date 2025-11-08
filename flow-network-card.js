@@ -629,7 +629,15 @@ class FlowNetworkCard extends HTMLElement {
       ctx.restore();
     }
   }
-  _quadPoint(a, c, b, t) { const u = 1 - t; return { x: u*u*a.x + 2*u*t*c.x + t*t*b.x, y: u*u*t*c.y + 2*u*t*c.y + t*t*b.y }; }
+// Punkt auf Quadratik zwischen A--C--B
+_quadPoint(a, c, b, t) {
+  const u = 1 - t;
+  return {
+    x: u*u*a.x + 2*u*t*c.x + t*t*b.x,
+    y: u*u*a.y + 2*u*t*c.y + t*t*b.y
+  };
+}
+
 
   // ---------- loop ----------
   _animStart() {
@@ -640,13 +648,49 @@ class FlowNetworkCard extends HTMLElement {
       const dt = this._lastTs ? (ts - this._lastTs) : 16;
       this._lastTs = ts;
       if (this._needsBgRedraw) { this._drawBg(); this._needsBgRedraw = false; }
-      //this._updateLinkDirections();
+      this._updateLinkDirections();
       this._drawDots(dt);
     };
     this._raf = requestAnimationFrame(step);
   }
   _animStop(){ if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
 }
+
+// setzt je Link die Richtung anhand des flow_entity-Wertes
+_updateLinkDirections() {
+  if (!this._links) return;
+  const missing = (this._config.missing_behavior || "stop");
+
+  const readNumber = (id) => {
+    const st = this._hass?.states?.[id];
+    const num = Number(st?.state);
+    return Number.isFinite(num) ? num : NaN;
+  };
+
+  for (const l of this._links) {
+    // wenn Link keine Geometrie hat, Richtung egal
+    l._dir = 0;
+
+    // Quelle für Flusswert: explizit -> flow_entity, sonst entity des FROM-Nodes
+    const fromNode = this._nodeMap?.get(l.from);
+    const flowId = (l.flow_entity != null && l.flow_entity !== "")
+      ? l.flow_entity
+      : (fromNode?.entity || null);
+
+    // kein Sensor → ggf. stoppen
+    if (!flowId) { if (missing === "stop") l._dir = 0; continue; }
+
+    const v = readNumber(flowId);
+    const thr = Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001;
+
+    // NaN oder ~0 → keine Animation
+    if (!Number.isFinite(v) || Math.abs(v) <= thr) { l._dir = 0; continue; }
+
+    // Vorzeichen bestimmt Richtung
+    l._dir = v > 0 ? 1 : -1;
+  }
+}
+
 
 customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
