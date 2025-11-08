@@ -1,18 +1,19 @@
 // flow-network-card.js
-// Flow Network Card – responsive, auto-size, half-row support, centered icon/value
-// Neu:
-// - value_expr / value_unit / value_precision pro Node zum Berechnen & Anzeigen
-// - Links: flow_entity default = entity des FROM-Nodes (wenn nicht explizit gesetzt)
+// Flow Network Card – responsive, auto-size, half-row support
+// NEU:
+// - Pro Node nur einfache Arithmetik: add / subtract (Zahl, Entity-ID oder Liste)
+// - Globale Einheiten-Umrechnung (compute.unit_mode): keep | w_to_kw
+// - flow_entity default = FROM-Node.entity (wenn nicht explizit gesetzt)
 
 class FlowNetworkCard extends HTMLElement {
   static getConfigElement(){ return null; } // YAML-only
-
   static getStubConfig() {
     return {
       background: "#14171a",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
       value_offset_px: 8,
+      compute: { unit_mode: "keep", suffix: null, precision: null }, // NEW (global)
       layout: {
         mode: "auto",
         columns: 4,
@@ -38,6 +39,7 @@ class FlowNetworkCard extends HTMLElement {
       value_precision: 2,
       node_text_color: "rgba(255,255,255,0.92)",
       value_offset_px: 8,
+      compute: { unit_mode: "keep", suffix: null, precision: null }, // NEW
       layout: {
         mode: "auto",
         columns: 4,
@@ -138,22 +140,20 @@ class FlowNetworkCard extends HTMLElement {
         id: String(n.id || `n${i}`),
         label: n.label || n.id,
         entity: n.entity || "",
-        // Neu: Berechnung/Anzeige konfigurieren:
-        value_expr: n.value_expr || null,            // z.B. "(v/1000)" oder "(get('sensor.x') - v) * 0.5"
-        value_unit: n.value_unit || null,            // z.B. "kW"
-        value_precision: Number.isFinite(n.value_precision) ? Number(n.value_precision) : null,
+        // NEU: einfache Arithmetik
+        add: n.add ?? null,         // Zahl | string(entity) | [ .. ]
+        subtract: n.subtract ?? null,
 
         shape: (n.shape || "rounded").toLowerCase(),
-        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,  // auto wenn null
+        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,
         ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
         ringWidth: Math.max(2, Number(n.ringWidth || 3)),
         text_color: n.color || this._config.node_text_color,
-        fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null, // auto wenn null
+        fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null,
         order: n.order ?? i,
         icon: n.icon || null,
-        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,  // auto wenn null
+        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,
         icon_color: n.icon_color || "#ffffff",
-        // row darf Dezimal sein (half rows)
         row: (row !== undefined && row !== null) ? Number(row) : null,
         col: Number.isFinite(col) ? Math.max(1, Math.floor(col)) : null,
         _labelSide: "top",
@@ -163,7 +163,7 @@ class FlowNetworkCard extends HTMLElement {
 
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
-    // Links: flow_entity default = FROM-Node.entity (wenn nicht explizit gesetzt)
+    // Links: flow_entity default = FROM-Node.entity
     this._links = (this._config.links || [])
       .map(l => {
         const fromId = String(l.from || "");
@@ -186,7 +186,7 @@ class FlowNetworkCard extends HTMLElement {
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
-  // ---------- layout: responsive metrics ----------
+  // ---------- layout ----------
   _metrics(pxW, pxH) {
     const cfg = this._config.layout || {};
     const padX = Number.isFinite(cfg.padding_x) ? cfg.padding_x : 16;
@@ -301,19 +301,48 @@ class FlowNetworkCard extends HTMLElement {
     const st = this._getState(id);
     const num = Number(st?.state);
     return isNaN(num) ? NaN : num;
+    }
+
+  // einfache Arithmetik: add/subtract
+  _resolveTerm(t) {
+    if (Array.isArray(t)) return t.map(x=>this._resolveTerm(x)).reduce((a,b)=>a+(Number.isFinite(b)?b:0),0);
+    if (typeof t === "number") return t;
+    if (typeof t === "string") {
+      const maybeNum = Number(t);
+      if (!isNaN(maybeNum)) return maybeNum;
+      return this._getNumber(t); // Entity-ID
+    }
+    return 0;
   }
 
-  // Mini-Evaluator für value_expr
-  _evalExpr(expr, ctx) {
-    try {
-      // Sicherheitsrahmen: nur gezielte Variablen zulassen
-      const fn = new Function("v","attrs","states","get","Math", `return ( ${expr} );`);
-      return fn(ctx.v, ctx.attrs, ctx.states, ctx.get, Math);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("value_expr error:", e);
-      return null;
+  _applyNodeMath(node, base) {
+    let val = base;
+    if (node.add !== null && node.add !== undefined) {
+      const addv = this._resolveTerm(node.add);
+      if (Number.isFinite(addv)) val += addv;
     }
+    if (node.subtract !== null && node.subtract !== undefined) {
+      const subv = this._resolveTerm(node.subtract);
+      if (Number.isFinite(subv)) val -= subv;
+    }
+    return val;
+  }
+
+  _applyGlobalUnit(val, unitDefault) {
+    const cmp = this._config.compute || {};
+    const mode = (cmp.unit_mode || "keep").toLowerCase();
+    const precOverride = Number.isFinite(cmp.precision) ? Number(cmp.precision) : null;
+    let unit = unitDefault || "";
+    let out = val;
+
+    if (mode === "w_to_kw") {
+      out = val * 0.001;
+      unit = " kW";
+    }
+    if (typeof cmp.suffix === "string" && cmp.suffix.length) {
+      unit = " " + cmp.suffix;
+    }
+    return { out, unit, precOverride };
   }
 
   _readEntityValue(node) {
@@ -322,37 +351,14 @@ class FlowNetworkCard extends HTMLElement {
     const st = this._getState(entityId); if (!st) return { raw: null, text: "" };
 
     const rawNum = Number(st.state);
-    const unitDefault = st.attributes.unit_of_measurement ? " " + st.attributes.unit_of_measurement : "";
-    const precisionDefault = this._config.value_precision ?? 2;
-
-    // ggf. Expression ausführen
-    if (!isNaN(rawNum) && node.value_expr) {
-      const ctx = {
-        v: rawNum,
-        attrs: st.attributes || {},
-        states: this._hass.states || {},
-        get: (id) => this._getNumber(id)
-      };
-      const res = this._evalExpr(node.value_expr, ctx);
-      if (res === null || res === undefined) {
-        // Fallback auf Rohwert
-        return { raw: rawNum, text: rawNum.toFixed(precisionDefault) + unitDefault };
-      }
-      if (typeof res === "number" && isFinite(res)) {
-        const prec = Number.isFinite(node.value_precision) ? node.value_precision : precisionDefault;
-        const unit = (node.value_unit != null) ? (" " + String(node.value_unit)) : unitDefault;
-        return { raw: res, text: res.toFixed(prec) + unit };
-      }
-      // String-Ergebnis direkt anzeigen
-      return { raw: res, text: String(res) };
-    }
-
-    // Standarddarstellung (ohne Expression)
     if (!isNaN(rawNum)) {
-      const prec = Number.isFinite(node.value_precision) ? node.value_precision : precisionDefault;
-      const unit = (node.value_unit != null) ? (" " + String(node.value_unit)) : unitDefault;
-      return { raw: rawNum, text: rawNum.toFixed(prec) + unit };
+      const afterMath = this._applyNodeMath(node, rawNum);
+      const unitDefault = st.attributes.unit_of_measurement ? " " + st.attributes.unit_of_measurement : "";
+      const g = this._applyGlobalUnit(afterMath, unitDefault);
+      const precision = (g.precOverride != null) ? g.precOverride : (this._config.value_precision ?? 2);
+      return { raw: afterMath, text: Number(afterMath).toFixed(precision) + g.unit };
     }
+    // non-numeric
     return { raw: st.state, text: String(st.state) };
   }
 
@@ -558,7 +564,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // Entity-Wert (mit optionaler value_expr)
+    // Wert (nach add/subtract + globale Umrechnung)
     const v = this._readEntityValue(n);
     const iconH = n.icon ? (n.icon_size || 24) : 0;
     const iconBottomY = p.y + iconH/2;
@@ -571,9 +577,13 @@ class FlowNetworkCard extends HTMLElement {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = n.text_color;
+    const globalPrec = (this._config.compute?.precision != null) ? this._config.compute.precision : (this._config.value_precision ?? 2);
     ctx.font = `bold ${Math.max(12, n.fontSize || 14)}px ${this._config.font_family}`;
+    // v.text ist bereits formatiert; wir nutzen es direkt:
     ctx.fillText(v.text, p.x, valueY);
     ctx.restore();
+
+    // Icon wird separat positioniert
   }
 
   _strokeShape(ctx, shape, cx, cy, r, size) {
@@ -652,7 +662,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (Responsive + Value Expressions)",
-  description: "Neon nodes, centered icon/value, responsive grid, half-row support, computed values, entity-driven flow.",
+  name: "Flow Network Card (Simple Math + Global Unit)",
+  description: "Neon nodes, responsive, +/- per node, global unit conversion, entity-driven flow.",
   preview: true
 });
