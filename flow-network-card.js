@@ -94,24 +94,31 @@ class FlowNetworkCard extends HTMLElement {
 
     this._prepare();
     this._resize();
-    this._updateLinkDirections();
-
-    // First-render fix
-    if (!this._initializedFix) {
-      this._initializedFix = true;
-      setTimeout(() => {
-        const rect = this.wrapper?.getBoundingClientRect?.();
-        if (rect && rect.width > 0 && rect.height > 0) this._resize();
-        else {
-          const waitForVisible = () => {
-            const r = this.wrapper?.getBoundingClientRect?.();
-            if (r && r.width > 0 && r.height > 0) this._resize();
-            else requestAnimationFrame(waitForVisible);
-          };
-          requestAnimationFrame(waitForVisible);
-        }
-      }, 50);
+    this._updateLinkDirections() {
+    if (!this._links) return;
+    const missing = (this._config.missing_behavior || "stop");
+    for (const l of this._links) {
+      if (l.flow_entity) {
+        const v = this._readNumber(l.flow_entity);
+        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0)) { l._dir = 0; l._effectiveSpeed = 0; continue; }
+        l._dir = v > 0 ? 1 : -1;
+        const __fd = Number.isFinite(l.factor_divisor) ? Number(l.factor_divisor) : ((this._config && Number.isFinite(this._config.factor_divisor)) ? Number(this._config.factor_divisor) : 4000);
+        const __fv = Math.abs(v) / Math.max(1e-6, __fd);
+        const __f = Number.isFinite(l.factor) ? Math.min(2, Math.max(0, Number(l.factor))) : 1;
+        l._effectiveSpeed = __fv * __f;
+      } else if (missing === "stop") {
+        l._dir = 0; l._effectiveSpeed = 0;
+      } else {
+        const fromNode = this._nodeMap.get(l.from);
+        const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
+        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0)) ? 1 : 0;
+        const __fd2 = Number.isFinite(l.factor_divisor) ? Number(l.factor_divisor) : ((this._config && Number.isFinite(this._config.factor_divisor)) ? Number(this._config.factor_divisor) : 4000);
+        const __fv2 = Math.abs(v) / Math.max(1e-6, __fd2);
+        const __f2 = Number.isFinite(l.factor) ? Math.min(2, Math.max(0, Number(l.factor))) : 1;
+        l._effectiveSpeed = (l._dir !== 0) ? (__fv2 * __f2) : 0;
+      }
     }
+  }
   }
 
   set hass(hass) {
@@ -374,12 +381,12 @@ class FlowNetworkCard extends HTMLElement {
     for (const l of this._links) {
       if (l.flow_entity) {
         const v = this._readNumber(l.flow_entity);
-        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) { l._dir = 0; l._effectiveSpeed = 0; continue; }
+        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0)) { l._dir = 0; l._effectiveSpeed = 0; continue; }
         l._dir = v > 0 ? 1 : -1;
       } else if (missing === "stop") { l._dir = 0; l._effectiveSpeed = 0; } else {
         const fromNode = this._nodeMap.get(l.from);
         const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
-        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0.0001)) ? 1 : 0;
+        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0)) ? 1 : 0;
       l._effectiveSpeed = (l._dir !== 0) ? (Math.abs(v) * (Number.isFinite(l.factor) ? Math.min(2, Math.max(0, l.factor)) : 1)) : 0;}
     }
   }
