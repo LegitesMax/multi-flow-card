@@ -26,6 +26,7 @@ class FlowNetworkCard extends HTMLElement {
         auto_height: true
       },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
+      flow_speed: { mode: "by_entity", value_min: 0, value_max: 3000, speed_min: 0.05, speed_max: 2.5, multiplier: 1 },
       link_fan_out: { enabled: true, strength: 0.12 },
       nodes: [],
       links: []
@@ -39,7 +40,8 @@ class FlowNetworkCard extends HTMLElement {
       value_precision: 2,
       node_text_color: "rgba(255,255,255,0.92)",
       value_offset_px: 8,
-      compute: { unit_mode: "keep", suffix: null, precision: null }, // NEW
+      compute: { unit_mode: "keep", suffix: null, precision: null },
+      flow_speed: { mode: "by_entity", value_min: 0, value_max: 3000, speed_min: 0.05, speed_max: 2.5, multiplier: 1 }, // NEW
       layout: {
         mode: "auto",
         columns: 4,
@@ -94,28 +96,49 @@ class FlowNetworkCard extends HTMLElement {
 
     this._prepare();
     this._resize();
-    this._updateLinkDirections();
 
-    // First-render fix
-    if (!this._initializedFix) {
-      this._initializedFix = true;
-      setTimeout(() => {
-        const rect = this.wrapper?.getBoundingClientRect?.();
-        if (rect && rect.width > 0 && rect.height > 0) this._resize();
-        else {
-          const waitForVisible = () => {
-            const r = this.wrapper?.getBoundingClientRect?.();
-            if (r && r.width > 0 && r.height > 0) this._resize();
-            else requestAnimationFrame(waitForVisible);
-          };
-          requestAnimationFrame(waitForVisible);
-        }
-      }, 50);
+  _updateLinkDirections() {
+    if (!this._links) return;
+    const missing = (this._config.missing_behavior || "stop");
+    const fs = this._config.flow_speed || { mode: "by_entity", value_min: 0, value_max: 3000, speed_min: 0.05, speed_max: 2.5, multiplier: 1 };
+
+    for (const l of this._links) {
+      // direction from entity
+      let v = NaN;
+      if (l.flow_entity) {
+        v = this._readNumber(l.flow_entity);
+        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0)) { l._dir = 0; l._speed = 0; continue; }
+        l._dir = v > 0 ? 1 : -1;
+      } else if (missing === "stop") {
+        l._dir = 0; l._speed = 0; continue;
+      } else {
+        const fromNode = this._nodeMap.get(l.from);
+        const fv = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
+        if (isNaN(fv) || Math.abs(fv) <= (l.zero_threshold ?? 0)) { l._dir = 0; l._speed = 0; continue; }
+        l._dir = 1; v = fv;
+      }
+
+      // global dynamic speed
+      let spd = Number(l.speed ?? 1);
+      if ((fs.mode || "by_entity") === "by_entity") {
+        const absW = Math.abs(v);
+        const vmin = Number.isFinite(fs.value_min) ? fs.value_min : 0;
+        const vmax = Number.isFinite(fs.value_max) ? fs.value_max : 3000;
+        const smin = Number.isFinite(fs.speed_min) ? fs.speed_min : 0.05;
+        const smax = Number.isFinite(fs.speed_max) ? fs.speed_max : 2.5;
+        spd = this._map(absW, vmin, vmax, smin, smax, true);
+      }
+      const mult = Number.isFinite(fs.multiplier) ? fs.multiplier : 1;
+      l._speed = Math.max(0.01, spd * mult);
     }
   }
 
   set hass(hass) {
-    this._hass = hass;
+    
+      // normalize global flow_speed defaults + overrides
+      const _fs = Object.assign({ mode: "by_entity", value_min: 0, value_max: 3000, speed_min: 0.05, speed_max: 2.5, multiplier: 1 }, (config && config.flow_speed) || {});
+      this._config.flow_speed = _fs;
+this._hass = hass;
     if (this._nodes) this._needsBgRedraw = true;
     this._updateLinkDirections();
   }
@@ -180,7 +203,7 @@ class FlowNetworkCard extends HTMLElement {
           autoCurve: (l.curve === undefined || l.curve === null),
           flow_entity: (l.flow_entity !== undefined && l.flow_entity !== null) ? l.flow_entity : defaultFlow,
           zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0,
-          _t: 0, _dir: 0
+         _t: 0, _dir: 0, _speed: 0
         };
       })
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
@@ -367,6 +390,15 @@ class FlowNetworkCard extends HTMLElement {
     const num = Number(st?.state);
     return isNaN(num) ? NaN : num;
   }
+
+  // Linear mapping helper (with optional clamping)
+  _map(val, inMin, inMax, outMin, outMax, clamp=true) {
+    if (inMax === inMin) return outMin;
+    let t = (val - inMin) / (inMax - inMin);
+    if (clamp) t = Math.max(0, Math.min(1, t));
+    return outMin + t * (outMax - outMin);
+  }
+
 
   _updateLinkDirections() {
     if (!this._links) return;
@@ -619,7 +651,7 @@ class FlowNetworkCard extends HTMLElement {
       if (!l._pA || !l._pB) continue;
       if (l._dir === 0) continue;
 
-      l._t = (l._t + (dtMs/1000) * (l.speed ?? 1)) % 1;
+      l._t = (l._t + (dtMs/1000) * (l._speed ?? l.speed ?? 1)) % 1;
       const tPrime = l._dir === 1 ? l._t : (1 - l._t);
 
       const pos = l._curved
