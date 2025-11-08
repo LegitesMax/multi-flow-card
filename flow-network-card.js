@@ -617,7 +617,8 @@ class FlowNetworkCard extends HTMLElement {
       if (!l._pA || !l._pB) continue;
       if (l._dir === 0) continue;
 
-      l._t = (l._t + (dtMs/1000) * (l._effectiveSpeed ?? 0)) % 1;
+      const __spd = Math.min(0.6, Math.max(0, (l._effectiveSpeed ?? 0)));
+      l._t = (l._t + (dtMs/1000) * __spd) % 1;
       const tPrime = l._dir === 1 ? l._t : (1 - l._t);
 
       const pos = l._curved
