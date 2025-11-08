@@ -1,29 +1,27 @@
 // flow-network-card.js
-// Flow Network Card – responsive grid, IN/OUT optional, leere Werte ausblenden,
-// suffix-gesteuerte W↔kW-Anzeige, auto-height nach Textinhalt.
+// Flow Network Card – stabile Version mit optionalen IN/OUT, leere Werte ausblenden,
+// W<->kW über compute.suffix, Auto-Height, robuster Link-Renderer (ohne Fan-Out).
 
 class FlowNetworkCard extends HTMLElement {
-  static getConfigElement(){ return null; } // YAML-only
+  static getConfigElement(){ return null; }
   static getStubConfig() {
     return {
-      background: "#14171a",
+      background: "transparent",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
       value_offset_px: 8,
-      compute: { unit_mode: "keep", suffix: null, precision: null },
+      compute: { suffix: null, precision: null }, // "W" oder "kW"
       layout: {
         mode: "auto",
         columns: 4,
-        responsive: true,
-        gap_x: 38,
-        gap_y: 26,
-        padding_x: 26,
-        padding_y: 20,
         preferred_col_width: 180,
+        gap_x: 20,
+        gap_y: 24,
+        padding_x: 16,
+        padding_y: 16,
         auto_height: true
       },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
-      link_fan_out: { enabled: true, strength: 0.12 },
       nodes: [],
       links: []
     };
@@ -34,23 +32,20 @@ class FlowNetworkCard extends HTMLElement {
       background: "transparent",
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
-      node_text_color: "rgba(255,255,255,0.92)",
       value_offset_px: 8,
-      compute: { unit_mode: "keep", suffix: null, precision: null },
+      node_text_color: "rgba(255,255,255,0.92)",
+      compute: { suffix: null, precision: null },
       layout: {
         mode: "auto",
         columns: 4,
-        responsive: true,
-        gap_x: 28,
-        gap_y: 22,
-        padding_x: 22,
-        padding_y: 18,
-        preferred_col_width: 160,
+        preferred_col_width: 180,
+        gap_x: 20,
+        gap_y: 24,
+        padding_x: 16,
+        padding_y: 16,
         auto_height: true
       },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
-      missing_behavior: "stop",
-      link_fan_out: { enabled: true, strength: 0.12 },
       ...config
     };
 
@@ -62,8 +57,8 @@ class FlowNetworkCard extends HTMLElement {
       this.wrapper = document.createElement("div");
       Object.assign(this.wrapper.style, { position: "relative", width: "100%", height: "360px" });
 
-      this.bg = document.createElement("canvas");
-      this.fg = document.createElement("canvas");
+      this.bg = document.createElement("canvas"); // Hintergrund: Nodes, Links, Texte
+      this.fg = document.createElement("canvas"); // Vordergrund: Dots
       for (const c of [this.bg, this.fg]) {
         Object.assign(c.style, { display: "block", width: "100%", height: "100%", position: "absolute", inset: "0" });
       }
@@ -95,26 +90,13 @@ class FlowNetworkCard extends HTMLElement {
     this._resize();
     this._updateLinkDirections();
 
-    if (!this._initializedFix) {
-      this._initializedFix = true;
-      setTimeout(() => {
-        const rect = this.wrapper?.getBoundingClientRect?.();
-        if (rect && rect.width > 0 && rect.height > 0) this._resize();
-        else {
-          const waitForVisible = () => {
-            const r = this.wrapper?.getBoundingClientRect?.();
-            if (r && r.width > 0 && r.height > 0) this._resize();
-            else requestAnimationFrame(waitForVisible);
-          };
-          requestAnimationFrame(waitForVisible);
-        }
-      }, 50);
-    }
+    // sicheres Re-Layout nach dem Einfügen
+    setTimeout(() => this._resize(), 50);
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._nodes) this._needsBgRedraw = true;
+    this._needsBgRedraw = true;
     this._updateLinkDirections();
   }
 
@@ -122,9 +104,11 @@ class FlowNetworkCard extends HTMLElement {
   disconnectedCallback(){ this._animStop(); if (this._resizeObserver) this._resizeObserver.disconnect(); }
   getCardSize(){ return 3; }
 
-  // ---------- data ----------
+  // ---------- Setup ----------
   _prepare() {
-    this._nodes = (this._config.nodes || []).map((n, i) => {
+    const cfg = this._config;
+
+    this._nodes = (cfg.nodes || []).map((n, i) => {
       let row = n.row, col = n.col;
       if ((row === undefined || col === undefined) && typeof n.grid === "string") {
         const m = n.grid.trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+)$/);
@@ -138,17 +122,18 @@ class FlowNetworkCard extends HTMLElement {
         id: String(n.id || `n${i}`),
         label: n.label || n.id,
         entity: n.entity || "",
-        // IN/OUT Labels standardmäßig leer -> nur anzeigen, wenn explizit gesetzt
+        // optional – nur Anzeige, wenn gesetzt und Wert vorhanden
         in_entity:  n.in_entity  || null,
         out_entity: n.out_entity || null,
-        in_label:   (n.in_label   ?? ""),   // vorher "IN"
-        out_label:  (n.out_label  ?? ""),   // vorher "OUT"
+        in_label:   (n.in_label   ?? ""),
+        out_label:  (n.out_label  ?? ""),
 
         shape: (n.shape || "rounded").toLowerCase(),
         size: sizeSpecified ? Math.max(56, Number(n.size)) : null,
-        ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
+        ring: n.ring || "#23b0ff",
+        fill: n.fill || "#121418",
         ringWidth: Math.max(2, Number(n.ringWidth || 3)),
-        text_color: n.color || this._config.node_text_color,
+        text_color: n.color || cfg.node_text_color,
         fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null,
         order: n.order ?? i,
         icon: n.icon || null,
@@ -163,64 +148,45 @@ class FlowNetworkCard extends HTMLElement {
 
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
-    this._links = (this._config.links || [])
-      .map(l => {
-        const fromId = String(l.from || "");
-        const toId   = String(l.to || "");
-        const fromNode = this._nodeMap.get(fromId);
-        const defaultFlow = fromNode?.entity || null;
-        return {
-          from: fromId,
-          to: toId,
-          color: l.color || "rgba(255,255,255,0.85)",
-          width: Math.max(1, Number(l.width || 2)),
-          speed: Math.max(0.05, Number(l.speed || 0.8)),
-          curve: (l.curve === undefined || l.curve === null) ? 0 : Number(l.curve),
-          autoCurve: (l.curve === undefined || l.curve === null),
-          flow_entity: (l.flow_entity !== undefined && l.flow_entity !== null) ? l.flow_entity : defaultFlow,
-          zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
-          _t: 0, _dir: 0
-        };
-      })
+    this._links = (cfg.links || [])
+      .map(l => ({
+        from: String(l.from || ""),
+        to: String(l.to || ""),
+        color: l.color || "rgba(255,255,255,0.85)",
+        width: Math.max(1, Number(l.width || 2)),
+        speed: Math.max(0.05, Number(l.speed || 0.8)),
+        curve: Number.isFinite(l.curve) ? Number(l.curve) : 0,
+        zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
+        flow_entity: (l.flow_entity || null),
+        _t: 0, _dir: 0
+      }))
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
-  // ---------- layout metrics ----------
+  // ---------- Layout ----------
   _metrics(pxW, pxH) {
-    const cfg = this._config.layout || {};
-    const padX = Number.isFinite(cfg.padding_x) ? cfg.padding_x : 16;
-    const padY = Number.isFinite(cfg.padding_y) ? cfg.padding_y : 16;
-    const gapX = Number.isFinite(cfg.gap_x) ? cfg.gap_x : 20;
-    const gapY = Number.isFinite(cfg.gap_y) ? cfg.gap_y : 20;
-    const prefW = Math.max(80, Number(cfg.preferred_col_width || 0));
-    const targetCols = Math.max(1, Math.floor(cfg.columns || 3));
-    const anyPinned = this._nodes.some(n => n.row != null || n.col != null);
-
-    const rowsAuto = Math.ceil(this._nodes.length / targetCols);
-    const maxPinnedRow = this._nodes.reduce((m, n) => Math.max(m, n.row != null ? Math.ceil(Number(n.row)) : 0), 0);
-    const baseRows = anyPinned ? Math.max(maxPinnedRow, rowsAuto) : rowsAuto;
+    const ly = this._config.layout || {};
+    const padX = Number.isFinite(ly.padding_x) ? ly.padding_x : 16;
+    const padY = Number.isFinite(ly.padding_y) ? ly.padding_y : 16;
+    const gapX = Number.isFinite(ly.gap_x) ? ly.gap_x : 20;
+    const gapY = Number.isFinite(ly.gap_y) ? ly.gap_y : 24;
+    const prefW = Math.max(80, Number(ly.preferred_col_width || 0));
+    const colsTarget = Math.max(1, Math.floor(ly.columns || 4));
 
     const availW = Math.max(1, pxW - padX*2);
-    const responsive = !!cfg.responsive;
-
-    let cols = targetCols;
-    if (responsive) {
-      while (cols > 1) {
-        const gridWidthIfPref = cols * prefW + (cols - 1) * gapX;
-        if (gridWidthIfPref <= availW) break;
-        cols--;
-      }
+    let cols = colsTarget;
+    while (cols > 1) {
+      const gridWidthIfPref = cols * prefW + (cols - 1) * gapX;
+      if (gridWidthIfPref <= availW) break;
+      cols--;
     }
 
-    const cwFit = (availW - (cols - 1) * gapX) / cols;
-    const cw = Math.max(60, Math.min(cwFit, prefW));
+    const cw = Math.max(60, Math.min(prefW, (availW - (cols - 1) * gapX) / cols));
     const ch = cw;
+    const rows = Math.ceil(this._nodes.length / cols);
 
     const gridW = cols*cw + (cols-1)*gapX;
     const leftOffset = (pxW - gridW) / 2;
-
-    let rows = baseRows;
-    if (!anyPinned) rows = Math.ceil(this._nodes.length / cols);
 
     const totalH = padY*2 + rows*ch + (rows-1)*gapY;
     const topOffset = padY;
@@ -230,64 +196,27 @@ class FlowNetworkCard extends HTMLElement {
 
   _applyAutoLayout(pxW, pxH) {
     const m = this._metrics(pxW, pxH);
-    const cfg = this._config.layout || {};
     const cols = m.cols;
 
-    const anyPinned = this._nodes.some(n => n.row != null || n.col != null);
-
-    const placeNode = (n, rFloat, cInt) => {
-      const cx = m.leftOffset + (cInt-1)*(m.cw+m.gapX) + m.cw/2;
-      const cy = m.topOffset  + (rFloat-1)*(m.ch+m.gapY) + m.ch/2;
-      n.x = this._clamp01(cx / pxW);
-      n.y = this._clamp01(cy / pxH);
-      this._autoScaleNode(n, m.cw);
+    const placeNode = (node, r, c) => {
+      const cx = m.leftOffset + (c-1)*(m.cw+m.gapX) + m.cw/2;
+      const cy = m.topOffset  + (r-1)*(m.ch+m.gapY) + m.ch/2;
+      node.x = this._clamp01(cx / pxW);
+      node.y = this._clamp01(cy / pxH);
+      this._autoScaleNode(node, m.cw);
     };
 
-    if (!anyPinned) {
-      const n = this._nodes.length;
-      const rows = Math.ceil(n / cols);
-      this._nodes.sort((a,b)=> (a.order ?? 0) - (b.order ?? 0)).forEach((node, idx) => {
-        const r = Math.floor(idx / cols) + 1;
-        const c = (idx % cols) + 1;
-        placeNode(node, r, c);
-      });
-    } else {
-      const rows = m.rows;
-      const grid = Array.from({length: rows}, ()=> Array.from({length: cols}, ()=> null));
-      const floatPinned = [];
-      const free = [];
-      const byOrder = [...this._nodes].sort((a,b)=>(a.order??0)-(b.order??0));
+    const byOrder = [...this._nodes].sort((a,b)=> (a.order ?? 0) - (b.order ?? 0));
+    byOrder.forEach((node, idx) => {
+      const r = Math.floor(idx / cols) + 1;
+      const c = (idx % cols) + 1;
+      placeNode(node, r, c);
+    });
 
-      for (const n of byOrder) {
-        const hasRow = n.row != null;
-        const hasCol = n.col != null;
-        if (hasRow || hasCol) {
-          const r = hasRow ? Number(n.row) : 1;
-          const c = hasCol ? Math.max(1, Math.min(cols, Math.floor(n.col))) : 1;
-          if (Number.isInteger(r)) {
-            const ri = Math.max(1, Math.min(rows, r));
-            if (!grid[ri-1][c-1]) grid[ri-1][c-1] = n; else free.push(n);
-          } else {
-            n._rowFloat = Math.max(1, Math.min(rows, r));
-            n._colInt   = c;
-            floatPinned.push(n);
-          }
-        } else {
-          free.push(n);
-        }
-      }
-      for (let r=1;r<=rows;r++) for (let c=1;c<=cols;c++) if (!grid[r-1][c-1] && free.length) grid[r-1][c-1] = free.shift();
-      for (let r=1;r<=rows;r++) for (let c=1;c<=cols;c++) {
-        const n = grid[r-1][c-1]; if (!n || n._rowFloat) continue; placeNode(n, r, c);
-      }
-      for (const n of floatPinned) placeNode(n, n._rowFloat, n._colInt);
-    }
-
-    if (cfg.auto_height) this.wrapper.style.height = Math.round(m.totalH) + "px";
+    if (this._config.layout?.auto_height) this.wrapper.style.height = Math.round(m.totalH) + "px";
   }
 
   _autoScaleNode(n, cellW) {
-    // auto sizing + text fit
     let nodeSize = Math.round(Math.max(56, Math.min(140, (n._auto.size ? cellW * 0.72 : n.size))));
     n.size = nodeSize;
 
@@ -300,13 +229,14 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize || baseFont}px ${this._config.font_family}`;
     const maxTextWidth = nodeSize * 0.86;
 
-    const tIn  = this._composeLine(n, n.in_entity || n.entity, n.in_label);
-    const tOut = this._composeLine(n, n.out_entity || n.entity, n.out_label);
+    const lines = this._buildValueLines(n);
+    const t1 = lines[0] || "";
+    const t2 = lines[1] || "";
 
     let fs = n.fontSize || baseFont;
     const tooWide = () => {
-      const w1 = tIn ? ctx.measureText(tIn).width : 0;
-      const w2 = tOut ? ctx.measureText(tOut).width : 0;
+      const w1 = t1 ? ctx.measureText(t1).width : 0;
+      const w2 = t2 ? ctx.measureText(t2).width : 0;
       return Math.max(w1, w2) > maxTextWidth;
     };
     let guard = 0;
@@ -318,7 +248,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.restore();
   }
 
-  // ---------- helpers ----------
+  // ---------- Helpers ----------
   _clamp01(v){ return Math.max(0, Math.min(1, Number(v))); }
   _getState(id) { return this._hass?.states?.[id]; }
   _readNumber(entityId) {
@@ -327,7 +257,6 @@ class FlowNetworkCard extends HTMLElement {
     return Number.isFinite(num) ? num : NaN;
   }
 
-  // Suffix-gesteuerte Anzeige (W/kW) + Fallback unit_mode
   _applyGlobalUnit(val, unitDefault) {
     const cmp = this._config.compute || {};
     const precOverride = Number.isFinite(cmp.precision) ? Number(cmp.precision) : null;
@@ -341,9 +270,7 @@ class FlowNetworkCard extends HTMLElement {
     } else if (suf === "W") {
       out = val; unit = " W";
     } else {
-      const mode = (cmp.unit_mode || "keep").toLowerCase();
-      if (mode === "w_to_kw") { out = val * 0.001; unit = " kW"; }
-      // else keep: benutze entity unit
+      // keep entity unit
     }
     return { out, unit, precOverride };
   }
@@ -362,23 +289,31 @@ class FlowNetworkCard extends HTMLElement {
     return String(st.state ?? "");
   }
 
-  _composeLine(node, entityId, label) {
-    const v = this._formatValue(entityId);
-    if (!v) return "";
-    return label ? `${label} ${v}` : v;
+  _buildValueLines(n) {
+    const lines = [];
+    const hasIn  = !!n.in_entity;
+    const hasOut = !!n.out_entity;
+
+    if (hasIn || hasOut) {
+      const vIn  = hasIn  ? this._formatValue(n.in_entity)  : "";
+      const vOut = hasOut ? this._formatValue(n.out_entity) : "";
+      if (vIn)  lines.push(n.in_label ? `${n.in_label} ${vIn}` : vIn);
+      if (vOut) lines.push(n.out_label ? `${n.out_label} ${vOut}` : vOut);
+      return lines;
+    }
+
+    const v = n.entity ? this._formatValue(n.entity) : "";
+    if (v) lines.push(v);
+    return lines;
   }
 
   _updateLinkDirections() {
     if (!this._links) return;
-    const missing = (this._config.missing_behavior || "stop");
     for (const l of this._links) {
       l._dir = 0;
       const fromNode = this._nodeMap?.get(l.from);
-      const flowId = (l.flow_entity != null && l.flow_entity !== "")
-        ? l.flow_entity
-        : (fromNode?.entity || null);
-
-      if (!flowId) { if (missing === "stop") l._dir = 0; continue; }
+      const flowId = l.flow_entity || fromNode?.entity || null;
+      if (!flowId) continue;
 
       const v = this._readNumber(flowId);
       const thr = Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001;
@@ -405,7 +340,105 @@ class FlowNetworkCard extends HTMLElement {
     this._needsBgRedraw = true;
   }
 
-  // ---------- geometry ----------
+  // ---------- Icons ----------
+  _ensureIconEl(key, iconName, color, size) {
+    let el = this._iconEls.get(key);
+    if (!el) {
+      el = document.createElement("ha-icon");
+      Object.assign(el.style, { position: "absolute", transform: "translate(-50%, -50%)", pointerEvents: "none" });
+      this.iconLayer.appendChild(el);
+      this._iconEls.set(key, el);
+    }
+    el.setAttribute("icon", iconName);
+    el.style.color = color;
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    return el;
+  }
+  _positionIcons() {
+    const rect = this.wrapper.getBoundingClientRect();
+    for (const n of this._nodes) {
+      if (!n.icon) continue;
+      const px = { x: n.x * rect.width, y: n.y * rect.height };
+      const el = this._ensureIconEl(n.id, n.icon, n.icon_color || "#fff", n.icon_size || 24);
+      el.style.left = `${px.x}px`;
+      el.style.top  = `${px.y}px`;
+    }
+  }
+
+  // ---------- Zeichnen ----------
+  _computeLabelSides() {
+    const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));
+    for (const l of this._links) {
+      const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
+      if (!a || !b) continue;
+      const va = { dx: b._px.x - a._px.x, dy: b._px.y - a._px.y };
+      const vb = { dx: a._px.x - b._px.x, dy: a._px.y - b._px.y };
+      const sa = sum.get(a.id); sa.dx += va.dx; sa.dy += va.dy; sa.c++;
+      const sb = sum.get(b.id); sb.dx += vb.dx; sb.dy += vb.dy; sb.c++;
+    }
+    for (const n of this._nodes) {
+      const s = sum.get(n.id);
+      n._labelSide = (!s || s.c===0) ? "top" : (s.dy < 0 ? "bottom" : "top");
+    }
+  }
+
+  _drawBg() {
+    const ctx = this.bgCtx;
+    const w = this.bg.width  / (window.devicePixelRatio || 1);
+    const h = this.bg.height / (window.devicePixelRatio || 1);
+
+    if (this._config.background && this._config.background !== "transparent") {
+      ctx.fillStyle = this._config.background; ctx.fillRect(0,0,w,h);
+    } else ctx.clearRect(0,0,w,h);
+
+    for (const n of this._nodes) n._px = { x: n.x * w, y: n.y * h };
+
+    // --- Links: stabile, einfache Variante (keine Fan-Out-Spielereien) ---
+    for (const l of this._links || []) {
+      const a = this._nodeMap.get(l.from);
+      const b = this._nodeMap.get(l.to);
+      if (!a || !b) continue;
+
+      const pA = this._edgePoint(a, b);
+      const pB = this._edgePoint(b, a);
+
+      const mx = (pA.x + pB.x) / 2;
+      const my = (pA.y + pB.y) / 2;
+      const curve = Number.isFinite(l.curve) ? Number(l.curve) : 0;
+
+      const dx = pB.x - pA.x, dy = pB.y - pA.y;
+      const nx = -dy, ny = dx;
+      const len = Math.hypot(nx, ny) || 1;
+      const nux = nx / len, nuy = ny / len;
+      const ctrlDist = Math.hypot(dx, dy);
+      const cx = mx + nux * curve * ctrlDist;
+      const cy = my + nuy * curve * ctrlDist;
+
+      const wLine = Math.max(1, Number(l.width || 2));
+
+      ctx.save();
+      ctx.strokeStyle = l.color || "rgba(255,255,255,0.85)";
+      ctx.lineWidth = wLine;
+      ctx.beginPath();
+      ctx.moveTo(pA.x, pA.y);
+      if (curve) ctx.quadraticCurveTo(cx, cy, pB.x, pB.y); else ctx.lineTo(pB.x, pB.y);
+      ctx.stroke();
+      ctx.restore();
+
+      // für Dots (Vordergrund)
+      l._pA = pA; l._pB = pB; l._c = { x: cx, y: cy }; l._curved = !!curve;
+    }
+
+    this._computeLabelSides();
+
+    // --- Nodes + Labels/Werte ---
+    for (const n of this._nodes) this._drawNode(ctx, n);
+
+    // Auto-Height nach realem Inhalt
+    this._ensureAutoHeight();
+  }
+
   _edgePoint(from, to) {
     const ax = from._px.x, ay = from._px.y;
     const bx = to._px.x, by = to._px.y;
@@ -436,120 +469,6 @@ class FlowNetworkCard extends HTMLElement {
     return { x: ax + ux * t, y: ay + uy * t };
   }
 
-  // ---------- icons ----------
-  _ensureIconEl(key, iconName, color, size) {
-    let el = this._iconEls.get(key);
-    if (!el) {
-      el = document.createElement("ha-icon");
-      Object.assign(el.style, { position: "absolute", transform: "translate(-50%, -50%)", pointerEvents: "none" });
-      this.iconLayer.appendChild(el);
-      this._iconEls.set(key, el);
-    }
-    el.setAttribute("icon", iconName);
-    el.style.color = color;
-    el.style.width = `${size}px`;
-    el.style.height = `${size}px`;
-    return el;
-  }
-  _positionIcons() {
-    const rect = this.wrapper.getBoundingClientRect();
-    for (const n of this._nodes) {
-      if (!n.icon) continue;
-      const px = { x: n.x * rect.width, y: n.y * rect.height };
-      const el = this._ensureIconEl(n.id, n.icon, n.icon_color || "#fff", n.icon_size || 24);
-      el.style.left = `${px.x}px`;
-      el.style.top  = `${px.y}px`;
-    }
-  }
-
-  // ---------- labels & drawing ----------
-  _computeLabelSides() {
-    const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));    
-    for (const l of this._links) {
-      const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
-      if (!a || !b) continue;
-      const va = { dx: b._px.x - a._px.x, dy: b._px.y - a._px.y };
-      const vb = { dx: a._px.x - b._px.x, dy: a._px.y - b._px.y };
-      const sa = sum.get(a.id); sa.dx += va.dx; sa.dy += va.dy; sa.c++;
-      const sb = sum.get(b.id); sb.dx += vb.dx; sb.dy += vb.dy; sb.c++;
-    }
-    for (const n of this._nodes) {
-      const s = sum.get(n.id);
-      n._labelSide = (!s || s.c===0) ? "top" : (s.dy < 0 ? "bottom" : "top");
-    }
-  }
-
-  _drawBg() {
-    const ctx = this.bgCtx;
-    const w = this.bg.width  / (window.devicePixelRatio || 1);
-    const h = this.bg.height / (window.devicePixelRatio || 1);
-
-    if (this._config.background && this._config.background !== "transparent") {
-      ctx.fillStyle = this._config.background; ctx.fillRect(0,0,w,h);
-    } else ctx.clearRect(0,0,w,h);
-
-    for (const n of this._nodes) n._px = { x: n.x * w, y: n.y * h };
-
-    this._fanCache = null;
-
-    // Links
-    for (const l of this._links) {
-      const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
-      if (!a || !b) continue;
-
-      const pA = this._edgePoint(a, b), pB = this._edgePoint(b, a);
-
-      const mx = (pA.x + pB.x) / 2, my = (pA.y + pB.y) / 2;
-      const dx = pB.x - pA.x,      dy = pB.y - pA.y;
-      const nx = -dy, ny = dx;
-      const len = Math.hypot(nx, ny) || 1;
-      const nux = nx / len, nuy = ny / len;
-
-      let curve = l.curve || 0;
-
-      if (this._config.link_fan_out?.enabled && l.autoCurve) {
-        if (!this._fanCache) this._fanCache = new Map();
-        const keyBase = `${a.id}->${b.id}`;
-        if (!this._fanCache.has(keyBase)) {
-          const siblings = this._links.filter(x =>
-            (x.from === l.from && x.to !== l.to) || (x.to === l.to && x.from !== l.from)
-          );
-          const group = [l, ...siblings].filter(x => (x.from === l.from) || (x.to === l.to))
-            .sort((x,y)=>{
-              const bx = (x.from === l.from) ? this._nodeMap.get(x.to) : this._nodeMap.get(x.from);
-              const by = (y.from === l.from) ? this._nodeMap.get(y.to) : this._nodeMap.get(y.from);
-              return (bx?bx._px.y:0) - (by?by._px.y:0);
-            });
-          const n = group.length;
-          group.forEach((g, idx)=>{ const rel = (idx - (n-1)/2); this._fanCache.set(`${a.id}->${(g.to||'')}:${(g.from||'')}`, rel); });
-        }
-        const rel = this._fanCache.get(`${a.id}->${(l.to||'')}:${(l.from||'')}`) ?? 0;
-        const strength = Number(this._config.link_fan_out.strength ?? 0.10);
-        curve = rel * strength;
-      }
-
-      const ctrlDist = Math.hypot(dx,dy);
-      const cx = mx + nux * curve * ctrlDist;
-      const cy = my + nuy * curve * ctrlDist;
-
-      ctx.save();
-      ctx.strokeStyle = l.color; ctx.lineWidth = l.width;
-      ctx.beginPath(); ctx.moveTo(pA.x, pA.y);
-      if (curve) ctx.quadraticCurveTo(cx, cy, pB.x, pB.y); else ctx.lineTo(pB.x, pB.y);
-      ctx.stroke(); ctx.restore();
-
-      l._pA = pA; l._pB = pB; l._c = { x: cx, y: cy }; l._curved = !!curve;
-    }
-
-    this._computeLabelSides();
-
-    // Nodes
-    for (const n of this._nodes) this._drawNode(ctx, n);
-
-    // Nach dem Zeichnen: echte Inhaltshöhe ermitteln und Wrapper ggf. anpassen
-    this._ensureAutoHeight();
-  }
-
   _drawNode(ctx, n) {
     const p = n._px, r = n.size/2;
 
@@ -568,28 +487,25 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // Werte (IN/OUT, bis zu 2 Zeilen)
+    // Werte-Zeilen
     const iconH = n.icon ? (n.icon_size || 24) : 0;
     const iconBottomY = p.y + iconH/2;
     const extra = Math.max(6, this._config.value_offset_px || 8, Math.round(n.size * 0.06));
 
-    const line1 = this._composeLine(n, n.in_entity || n.entity, n.in_label);
-    const line2 = this._composeLine(n, n.out_entity || n.entity, n.out_label);
-
+    const lines = this._buildValueLines(n);
     const fs = Math.max(11, n.fontSize || 14);
     ctx.save();
     ctx.textAlign = "center"; ctx.fillStyle = n.text_color; ctx.font = `bold ${fs}px ${this._config.font_family}`;
+    ctx.textBaseline = "middle";
 
-    if (line1 && line2) {
+    if (lines.length === 2) {
       const y1 = iconBottomY + extra + fs * 0.5;
       const y2 = y1 + fs + 4;
-      ctx.textBaseline = "middle";
-      ctx.fillText(line1, p.x, y1);
-      ctx.fillText(line2, p.x, y2);
-    } else {
+      ctx.fillText(lines[0], p.x, y1);
+      ctx.fillText(lines[1], p.x, y2);
+    } else if (lines.length === 1) {
       const y = iconBottomY + extra + fs * 0.5;
-      ctx.textBaseline = "middle";
-      ctx.fillText(line1 || line2 || "", p.x, y);
+      ctx.fillText(lines[0], p.x, y);
     }
     ctx.restore();
   }
@@ -614,32 +530,27 @@ class FlowNetworkCard extends HTMLElement {
     ctx.closePath();
   }
 
-  // ---------- auto-height je Inhalt ----------
+  // ---------- Auto-Height ----------
   _estimateBounds() {
     const padY = Number(this._config.layout?.padding_y ?? 16);
-    let minY = Infinity;
-    let maxY = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
 
     for (const n of this._nodes) {
       const p = n._px, r = n.size/2;
       const fs = Math.max(11, n.fontSize || 14);
       const iconH = n.icon ? (n.icon_size || 24) : 0;
       const extra = Math.max(6, this._config.value_offset_px || 8, Math.round(n.size * 0.06));
-      const line1 = this._composeLine(n, n.in_entity || n.entity, n.in_label);
-      const line2 = this._composeLine(n, n.out_entity || n.entity, n.out_label);
-      const lines = (line1?1:0) + (line2?1:0);
+      const lines = this._buildValueLines(n);
+      const valuesH = lines.length ? (lines.length === 2 ? fs*2 + 4 : fs) : 0;
 
-      // Oberer Rand inkl. Top-Label (falls oben)
       const top = p.y - r - (n._labelSide === "top" ? (8 + fs) : 0);
-      // Unterer Rand inkl. Bottom-Label (falls unten) und Werte-Zeilen
-      const valuesH = lines ? (lines === 2 ? fs*2 + 4 : fs) : 0;
       const bottom = p.y + r + (n._labelSide === "bottom" ? (8 + fs) : 0) + iconH/2 + extra + valuesH;
 
       if (top < minY) minY = top;
       if (bottom > maxY) maxY = bottom;
     }
     if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return null;
-    return { top: minY - padY, bottom: maxY + padY, height: (maxY - minY) + padY*2 };
+    return { height: (maxY - minY) + (this._config.layout?.padding_y ?? 16) * 2 };
   }
 
   _ensureAutoHeight() {
@@ -650,18 +561,18 @@ class FlowNetworkCard extends HTMLElement {
     const target = Math.ceil(b.height);
     if (Math.abs(current - target) > 1) {
       this.wrapper.style.height = `${target}px`;
-      this._resize(); // Canvas-Größe nachziehen
+      this._resize();
     }
   }
 
-  // ---------- dots layer ----------
+  // ---------- Dots ----------
   _drawDots(dtMs) {
     const ctx = this.fgCtx;
     const w = this.fg.width / (window.devicePixelRatio || 1);
     const h = this.fg.height / (window.devicePixelRatio || 1);
     ctx.clearRect(0,0,w,h);
 
-    const fadeZone = Math.max(0.02, this._config.dot.fade_zone || 0.10);
+    const fadeZone = Math.max(0.02, this._config.dot?.fade_zone || 0.10);
 
     for (const l of this._links) {
       if (!l._pA || !l._pB) continue;
@@ -679,10 +590,10 @@ class FlowNetworkCard extends HTMLElement {
       else if (tPrime > 1 - fadeZone) alpha = (1 - tPrime) / fadeZone;
 
       ctx.save();
-      if (this._config.dot.glow) { ctx.shadowColor = l.color; ctx.shadowBlur = 8; }
+      if (this._config.dot?.glow) { ctx.shadowColor = l.color; ctx.shadowBlur = 8; }
       ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
       ctx.fillStyle = l.color;
-      const r = Math.max(3, this._config.dot.size || 5);
+      const r = Math.max(3, this._config.dot?.size || 5);
       ctx.beginPath(); ctx.arc(pos.x, pos.y, r, 0, Math.PI*2); ctx.fill();
       ctx.restore();
     }
@@ -693,7 +604,7 @@ class FlowNetworkCard extends HTMLElement {
     return { x: u*u*a.x + 2*u*t*c.x + t*t*b.x, y: u*u*a.y + 2*u*t*c.y + t*t*b.y };
   }
 
-  // ---------- loop ----------
+  // ---------- Loop ----------
   _animStart() {
     if (this._raf) return;
     const step = (ts) => {
@@ -714,7 +625,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (Suffix W/kW, Auto-Height)",
-  description: "Optionale IN/OUT-Labels, leere Werte ausblenden, W↔kW per Suffix, dynamische Höhe.",
+  name: "Flow Network Card (stable W/kW + optional IN/OUT)",
+  description: "Optionale IN/OUT-Labels, leere Werte ausblenden, W↔kW via suffix, auto-height, robuster Link-Renderer.",
   preview: true
 });
