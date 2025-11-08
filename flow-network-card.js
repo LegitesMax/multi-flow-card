@@ -1,7 +1,5 @@
 // flow-network-card.js
-// Flow Network Card – responsive grid, IN/OUT values per node, correct W→kW conversion,
-// default flow_entity = from-node.entity, smooth dot, rounded-edge link attachment,
-// auto text fit, first-render fix, fan-out for parallel links.
+// Flow Network Card – responsive, auto-size, half-row support, centered icon/value
 
 class FlowNetworkCard extends HTMLElement {
   static getConfigElement(){ return null; } // YAML-only
@@ -12,16 +10,15 @@ class FlowNetworkCard extends HTMLElement {
       font_family: "Inter, Roboto, system-ui, sans-serif",
       value_precision: 2,
       value_offset_px: 8,
-      compute: { unit_mode: "keep", suffix: null, precision: null },
       layout: {
         mode: "auto",
-        columns: 4,
-        responsive: true,
+        columns: 4,            // Ziel: PV | Batterie | Haus | Etagen
+        responsive: true,      // darf Spaltenzahl reduzieren, wenn zu schmal
         gap_x: 38,
         gap_y: 26,
         padding_x: 26,
         padding_y: 20,
-        preferred_col_width: 180,
+        preferred_col_width: 180, // weiche Wunschbreite je Spalte (px)
         auto_height: true
       },
       dot: { size: 5, glow: true, fade_zone: 0.10 },
@@ -38,7 +35,6 @@ class FlowNetworkCard extends HTMLElement {
       value_precision: 2,
       node_text_color: "rgba(255,255,255,0.92)",
       value_offset_px: 8,
-      compute: { unit_mode: "keep", suffix: null, precision: null },
       layout: {
         mode: "auto",
         columns: 4,
@@ -66,9 +62,7 @@ class FlowNetworkCard extends HTMLElement {
 
       this.bg = document.createElement("canvas");
       this.fg = document.createElement("canvas");
-      for (const c of [this.bg, this.fg]) {
-        Object.assign(c.style, { display: "block", width: "100%", height: "100%", position: "absolute", inset: "0" });
-      }
+      for (const c of [this.bg, this.fg]) Object.assign(c.style, { display: "block", width: "100%", height: "100%", position: "absolute", inset: "0" });
 
       this.iconLayer = document.createElement("div");
       Object.assign(this.iconLayer.style, { position: "absolute", inset: "0", pointerEvents: "none" });
@@ -97,7 +91,7 @@ class FlowNetworkCard extends HTMLElement {
     this._resize();
     this._updateLinkDirections();
 
-    // First-render fix (wenn Card erst unsichtbar gemountet wird)
+    // First-render fix
     if (!this._initializedFix) {
       this._initializedFix = true;
       setTimeout(() => {
@@ -141,22 +135,17 @@ class FlowNetworkCard extends HTMLElement {
         id: String(n.id || `n${i}`),
         label: n.label || n.id,
         entity: n.entity || "",
-        // NEU: pro Node zwei Zeilen (IN/OUT) – Fallback auf entity
-        in_entity:  n.in_entity  || null,
-        out_entity: n.out_entity || null,
-        in_label:   n.in_label   || "IN",
-        out_label:  n.out_label  || "OUT",
-
         shape: (n.shape || "rounded").toLowerCase(),
-        size: sizeSpecified ? Math.max(56, Number(n.size)) : null, // auto wenn null
+        size: sizeSpecified ? Math.max(44, Number(n.size)) : null,  // auto wenn null
         ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
         ringWidth: Math.max(2, Number(n.ringWidth || 3)),
         text_color: n.color || this._config.node_text_color,
         fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null, // auto wenn null
         order: n.order ?? i,
         icon: n.icon || null,
-        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null, // auto wenn null
+        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,  // auto wenn null
         icon_color: n.icon_color || "#ffffff",
+        // row darf Dezimal sein (half rows, z.B. 2.5)
         row: (row !== undefined && row !== null) ? Number(row) : null,
         col: Number.isFinite(col) ? Math.max(1, Math.floor(col)) : null,
         _labelSide: "top",
@@ -166,42 +155,37 @@ class FlowNetworkCard extends HTMLElement {
 
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
-    // Links: flow_entity default = FROM-Node.entity (falls nicht explizit gesetzt)
     this._links = (this._config.links || [])
-      .map(l => {
-        const fromId = String(l.from || "");
-        const toId   = String(l.to || "");
-        const fromNode = this._nodeMap.get(fromId);
-        const defaultFlow = fromNode?.entity || null;
-        return {
-          from: fromId,
-          to: toId,
-          color: l.color || "rgba(255,255,255,0.85)",
-          width: Math.max(1, Number(l.width || 2)),
-          speed: Math.max(0.05, Number(l.speed || 0.8)),
-          curve: (l.curve === undefined || l.curve === null) ? 0 : Number(l.curve),
-          autoCurve: (l.curve === undefined || l.curve === null),
-          flow_entity: (l.flow_entity !== undefined && l.flow_entity !== null) ? l.flow_entity : defaultFlow,
-          zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
-          _t: 0, _dir: 0
-        };
-      })
+      .map(l => ({
+        from: String(l.from || ""),
+        to: String(l.to || ""),
+        color: l.color || "rgba(255,255,255,0.85)",
+        width: Math.max(1, Number(l.width || 2)),
+        speed: Math.max(0.05, Number(l.speed || 0.8)),
+        curve: (l.curve === undefined || l.curve === null) ? 0 : Number(l.curve),
+        autoCurve: (l.curve === undefined || l.curve === null),
+        flow_entity: l.flow_entity || l.entity || null,
+        zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
+        _t: 0, _dir: 0
+      }))
       .filter(l => this._nodeMap.has(l.from) && this._nodeMap.has(l.to));
   }
 
-  // ---------- layout metrics ----------
+  // ---------- layout: responsive metrics ----------
   _metrics(pxW, pxH) {
     const cfg = this._config.layout || {};
     const padX = Number.isFinite(cfg.padding_x) ? cfg.padding_x : 16;
     const padY = Number.isFinite(cfg.padding_y) ? cfg.padding_y : 16;
     const gapX = Number.isFinite(cfg.gap_x) ? cfg.gap_x : 20;
     const gapY = Number.isFinite(cfg.gap_y) ? cfg.gap_y : 20;
-    const prefW = Math.max(80, Number(cfg.preferred_col_width || 0));
+    const prefW = Math.max(80, Number(cfg.preferred_col_width || 0)); // Wunschbreite je Spalte
     const targetCols = Math.max(1, Math.floor(cfg.columns || 3));
     const anyPinned = this._nodes.some(n => n.row != null || n.col != null);
 
     const rowsAuto = Math.ceil(this._nodes.length / targetCols);
-    const maxPinnedRow = this._nodes.reduce((m, n) => Math.max(m, n.row != null ? Math.ceil(Number(n.row)) : 0), 0);
+    const maxPinnedRow = this._nodes.reduce(
+      (m, n) => Math.max(m, n.row != null ? Math.ceil(Number(n.row)) : 0), 0
+    );
     const baseRows = anyPinned ? Math.max(maxPinnedRow, rowsAuto) : rowsAuto;
 
     const availW = Math.max(1, pxW - padX*2);
@@ -217,8 +201,8 @@ class FlowNetworkCard extends HTMLElement {
     }
 
     const cwFit = (availW - (cols - 1) * gapX) / cols;
-    const cw = Math.max(60, Math.min(cwFit, prefW));
-    const ch = cw;
+    const cw = Math.max(60, Math.min(cwFit, prefW)); // nie größer als Platz, nie kleiner als 60
+    const ch = cw; // quadratisch
 
     const gridW = cols*cw + (cols-1)*gapX;
     const leftOffset = (pxW - gridW) / 2;
@@ -291,103 +275,47 @@ class FlowNetworkCard extends HTMLElement {
   }
 
   _autoScaleNode(n, cellW) {
-    // auto sizing + text fit
-    let nodeSize = Math.round(Math.max(56, Math.min(140, (n._auto.size ? cellW * 0.72 : n.size))));
+    const nodeSize = Math.round(Math.max(56, Math.min(120, (n._auto.size ? cellW * 0.70 : n.size))));
     n.size = nodeSize;
-
     if (n._auto.icon) n.icon_size = Math.max(16, Math.min(64, Math.round(nodeSize * 0.38)));
-    const baseFont = Math.round(Math.max(12, Math.min(18, nodeSize * 0.18)));
-    if (n._auto.font) n.fontSize = baseFont;
-
-    // Soft-Fit: misst Textbreiten und reduziert Font behutsam (min 11px)
-    const ctx = this.bgCtx;
-    ctx.save();
-    ctx.font = `bold ${n.fontSize || baseFont}px ${this._config.font_family}`;
-    const maxTextWidth = nodeSize * 0.86;
-
-    const tIn  = this._composeLine(n, n.in_entity || n.entity, n.in_label);
-    const tOut = this._composeLine(n, n.out_entity || n.entity, n.out_label);
-
-    let fs = n.fontSize || baseFont;
-    const tooWide = () => {
-      const w1 = tIn ? ctx.measureText(tIn).width : 0;
-      const w2 = tOut ? ctx.measureText(tOut).width : 0;
-      return Math.max(w1, w2) > maxTextWidth;
-    };
-    let guard = 0;
-    while (tooWide() && fs > 11 && guard++ < 12) {
-      fs -= 1;
-      ctx.font = `bold ${fs}px ${this._config.font_family}`;
-    }
-    n.fontSize = fs;
-    ctx.restore();
+    if (n._auto.font) n.fontSize = Math.round(Math.max(12, Math.min(18, nodeSize * 0.18)));
   }
 
-  // ---------- helpers ----------
+  // ---------- utils ----------
   _clamp01(v){ return Math.max(0, Math.min(1, Number(v))); }
   _getState(id) { return this._hass?.states?.[id]; }
+  _readEntityValue(entityId) {
+    if (!this._hass || !entityId) return { raw: null, text: "" };
+    const st = this._getState(entityId); if (!st) return { raw: null, text: "" };
+    const num = Number(st.state);
+    if (!isNaN(num)) {
+      const p = this._config.value_precision ?? 2;
+      const unit = st.attributes.unit_of_measurement ? " " + st.attributes.unit_of_measurement : "";
+      return { raw: num, text: num.toFixed(p) + unit };
+    }
+    return { raw: st.state, text: String(st.state) };
+  }
   _readNumber(entityId) {
     const st = this._getState(entityId);
     const num = Number(st?.state);
-    return Number.isFinite(num) ? num : NaN;
+    return isNaN(num) ? NaN : num;
   }
 
-  // Globale Anzeige-Umrechnung (z. B. W → kW)
-  _applyGlobalUnit(val, unitDefault) {
-    const cmp = this._config.compute || {};
-    const mode = (cmp.unit_mode || "keep").toLowerCase();
-    const precOverride = Number.isFinite(cmp.precision) ? Number(cmp.precision) : null;
-    let unit = unitDefault || "";
-    let out = val;
-
-    if (mode === "w_to_kw") {
-      out = val * 0.001;
-      unit = " kW";
-    }
-    if (typeof cmp.suffix === "string" && cmp.suffix.length) {
-      unit = " " + cmp.suffix;
-    }
-    return { out, unit, precOverride };
-  }
-
-  _formatValue(entityId) {
-    if (!this._hass || !entityId) return "";
-    const st = this._getState(entityId);
-    if (!st) return "";
-    const num = Number(st.state);
-    if (Number.isFinite(num)) {
-      const unitDefault = st.attributes.unit_of_measurement ? " " + st.attributes.unit_of_measurement : "";
-      const g = this._applyGlobalUnit(num, unitDefault);
-      const precision = (g.precOverride != null) ? g.precOverride : (this._config.value_precision ?? 2);
-      return Number(g.out).toFixed(precision) + g.unit;
-    }
-    return String(st.state ?? "");
-  }
-
-  _composeLine(node, entityId, label) {
-    const v = this._formatValue(entityId);
-    if (!v) return "";
-    return label ? `${label} ${v}` : v;
-  }
-
-  // setzt je Link die Richtung anhand des flow_entity-Wertes
   _updateLinkDirections() {
     if (!this._links) return;
     const missing = (this._config.missing_behavior || "stop");
     for (const l of this._links) {
-      l._dir = 0;
-      const fromNode = this._nodeMap?.get(l.from);
-      const flowId = (l.flow_entity != null && l.flow_entity !== "")
-        ? l.flow_entity
-        : (fromNode?.entity || null);
-
-      if (!flowId) { if (missing === "stop") l._dir = 0; continue; }
-
-      const v = this._readNumber(flowId);
-      const thr = Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001;
-
-      if (!Number.isFinite(v) || Math.abs(v) <= thr) { l._dir = 0; continue; }
-      l._dir = v > 0 ? 1 : -1;
+      if (l.flow_entity) {
+        const v = this._readNumber(l.flow_entity);
+        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) { l._dir = 0; continue; }
+        l._dir = v > 0 ? 1 : -1;
+      } else if (missing === "stop") {
+        l._dir = 0;
+      } else {
+        const fromNode = this._nodeMap.get(l.from);
+        const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
+        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0.0001)) ? 1 : 0;
+      }
     }
   }
 
@@ -465,7 +393,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
-  // ---------- labels & drawing ----------
+  // ---------- labels ----------
   _computeLabelSides() {
     const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));
     for (const l of this._links) {
@@ -482,6 +410,7 @@ class FlowNetworkCard extends HTMLElement {
     }
   }
 
+  // ---------- draw bg ----------
   _drawBg() {
     const ctx = this.bgCtx;
     const w = this.bg.width  / (window.devicePixelRatio || 1);
@@ -495,7 +424,6 @@ class FlowNetworkCard extends HTMLElement {
 
     this._fanCache = null;
 
-    // Linien zeichnen
     for (const l of this._links) {
       const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
       if (!a || !b) continue;
@@ -548,8 +476,6 @@ class FlowNetworkCard extends HTMLElement {
     }
 
     this._computeLabelSides();
-
-    // Nodes zeichnen
     for (const n of this._nodes) this._drawNode(ctx, n);
   }
 
@@ -571,29 +497,21 @@ class FlowNetworkCard extends HTMLElement {
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
     ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
-    // Werte (IN/OUT, bis zu 2 Zeilen)
+    // Entity-Wert sicher unter dem Icon
+    const v = this._readEntityValue(n.entity);
     const iconH = n.icon ? (n.icon_size || 24) : 0;
     const iconBottomY = p.y + iconH/2;
     const extra = Math.max(6, this._config.value_offset_px || 8, Math.round(n.size * 0.06));
+    let valueY = iconBottomY + extra;
+    const innerBottom = p.y + r - 6;
+    if (valueY > innerBottom) valueY = innerBottom;
 
-    const line1 = this._composeLine(n, n.in_entity || n.entity, n.in_label);
-    const line2 = this._composeLine(n, n.out_entity || n.entity, n.out_label);
-
-    const fs = Math.max(11, n.fontSize || 14);
     ctx.save();
-    ctx.textAlign = "center"; ctx.fillStyle = n.text_color; ctx.font = `bold ${fs}px ${this._config.font_family}`;
-
-    if (line1 && line2) {
-      const y1 = iconBottomY + extra + fs * 0.5;
-      const y2 = y1 + fs + 4;
-      ctx.textBaseline = "middle";
-      ctx.fillText(line1, p.x, y1);
-      ctx.fillText(line2, p.x, y2);
-    } else {
-      const y = iconBottomY + extra + fs * 0.5;
-      ctx.textBaseline = "middle";
-      ctx.fillText(line1 || line2 || "", p.x, y);
-    }
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = n.text_color;
+    ctx.font = `bold ${Math.max(12, n.fontSize || 14)}px ${this._config.font_family}`;
+    ctx.fillText(v.text, p.x, valueY);
     ctx.restore();
   }
 
@@ -617,7 +535,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.closePath();
   }
 
-  // ---------- dots layer ----------
+  // ---------- dots ----------
   _drawDots(dtMs) {
     const ctx = this.fgCtx;
     const w = this.fg.width / (window.devicePixelRatio || 1);
@@ -650,11 +568,7 @@ class FlowNetworkCard extends HTMLElement {
       ctx.restore();
     }
   }
-
-  _quadPoint(a, c, b, t) {
-    const u = 1 - t;
-    return { x: u*u*a.x + 2*u*t*c.x + t*t*b.x, y: u*u*a.y + 2*u*t*c.y + t*t*b.y };
-  }
+  _quadPoint(a, c, b, t) { const u = 1 - t; return { x: u*u*a.x + 2*u*t*c.x + t*t*b.x, y: u*u*a.y + 2*u*t*c.y + t*t*b.y }; }
 
   // ---------- loop ----------
   _animStart() {
@@ -677,7 +591,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (IN/OUT + Global Units)",
-  description: "Two-line values per node (in/out), responsive grid, correct W→kW conversion, smooth dot flow.",
+  name: "Flow Network Card (Responsive)",
+  description: "Neon nodes, centered icon/value, responsive grid (preferred_col_width), half-row support, entity-driven flow.",
   preview: true
 });
