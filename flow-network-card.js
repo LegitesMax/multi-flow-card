@@ -174,12 +174,12 @@ class FlowNetworkCard extends HTMLElement {
           from: fromId,
           to: toId,
           color: l.color || "rgba(255,255,255,0.85)",
-          width: Math.max(1, Number(l.width || 2)),
-          speed: Math.max(0.05, Number(l.speed || 0.8)),
+          width: Math.max(1, Number(l.width ?? 2)),
+          speed: Math.max(0.05, Number(l.speed ?? 1)),
           curve: (l.curve === undefined || l.curve === null) ? 0 : Number(l.curve),
           autoCurve: (l.curve === undefined || l.curve === null),
           flow_entity: (l.flow_entity !== undefined && l.flow_entity !== null) ? l.flow_entity : defaultFlow,
-          zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0.0001,
+          zero_threshold: Number.isFinite(l.zero_threshold) ? Math.max(0, l.zero_threshold) : 0,
           _t: 0, _dir: 0
         };
       })
@@ -374,14 +374,14 @@ class FlowNetworkCard extends HTMLElement {
     for (const l of this._links) {
       if (l.flow_entity) {
         const v = this._readNumber(l.flow_entity);
-        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0.0001)) { l._dir = 0; continue; }
+        if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0)) { l._dir = 0; continue; }
         l._dir = v > 0 ? 1 : -1;
       } else if (missing === "stop") {
         l._dir = 0;
       } else {
         const fromNode = this._nodeMap.get(l.from);
         const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
-        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0.0001)) ? 1 : 0;
+        l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0)) ? 1 : 0;
       }
     }
   }
@@ -619,7 +619,7 @@ class FlowNetworkCard extends HTMLElement {
       if (!l._pA || !l._pB) continue;
       if (l._dir === 0) continue;
 
-      l._t = (l._t + (dtMs/1000) * (l.speed || 0.8)) % 1;
+      l._t = (l._t + (dtMs/1000) * (l.speed ?? 1)) % 1;
       const tPrime = l._dir === 1 ? l._t : (1 - l._t);
 
       const pos = l._curved
