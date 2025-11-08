@@ -1,0 +1,189 @@
+type: custom:flow-network-card
+background: "#14171a"
+font_family: Inter, Roboto, system-ui, sans-serif
+value_precision: 2
+value_offset_px: 9
+compute:
+  unit_mode: w_to_kw
+  suffix: W
+layout:
+  mode: auto
+  columns: 4
+  preferred_col_width: 180
+  gap_x: 20
+  gap_y: 40
+  padding_x: 26
+  padding_y: 20
+  auto_height: true
+dot:
+  size: 3
+  glow: false
+  fade_zone: 0.1
+link_fan_out:
+  enabled: true
+  strength: 0.1
+nodes:
+  - id: pv1
+    label: PV 1
+    entity: sensor.solarbank_3_e2700_pro_solar_pv1
+    icon: mdi:solar-panel
+    icon_color: "#baffea"
+    ring: "#7cffcb"
+    fill: "#0f2a22"
+    shape: rounded
+    row: 1.1
+    col: 1
+  - id: pv2
+    label: PV 2
+    entity: sensor.solarbank_3_e2700_pro_solar_pv2
+    icon: mdi:solar-panel
+    icon_color: "#baffea"
+    ring: "#7cffcb"
+    fill: "#0f2a22"
+    shape: rounded
+    row: 2
+    col: 1
+  - id: pv3
+    label: PV 3
+    entity: sensor.solarbank_3_e2700_pro_solar_pv3
+    icon: mdi:solar-panel
+    icon_color: "#baffea"
+    ring: "#7cffcb"
+    fill: "#0f2a22"
+    shape: rounded
+    row: 3
+    col: 1
+  - id: pv4
+    label: PV 4
+    entity: sensor.solarbank_3_e2700_pro_solar_pv4
+    icon: mdi:solar-panel
+    icon_color: "#baffea"
+    ring: "#7cffcb"
+    fill: "#0f2a22"
+    shape: rounded
+    row: 3.9
+    col: 1
+  - id: batt
+    label: Batterie
+    entity: sensor.system_solix_3_sb_akkuleistung
+    icon: mdi:battery-high
+    icon_color: "#ffc2c2"
+    ring: "#ff6b6b"
+    fill: "#2a1f22"
+    shape: rounded
+    row: 2.5
+    col: 2
+  - id: netz
+    label: Netz
+    entity: sensor.haus_gesamt
+    icon: mdi:battery-high
+    icon_color: "#8800ff"
+    ring: "#8800ff"
+    fill: "#2a1f22"
+    shape: rounded
+    row: 3.5
+    col: 3
+  - id: home
+    label: Zuhause
+    entity: sensor.haus_gesamt
+    icon: mdi:home-variant
+    icon_color: "#99dbff"
+    ring: "#23b0ff"
+    fill: "#0f1a22"
+    shape: rounded
+    row: 2.5
+    col: 3
+  - id: floor_kg
+    label: KG
+    entity: sensor.kg_energie_pro3em_total_active_power
+    icon: mdi:floor-plan
+    icon_color: "#ffe39a"
+    ring: "#ffd166"
+    fill: "#2b2614"
+    shape: rounded
+    row: 1.5
+    col: 4
+  - id: floor_eg
+    label: EG
+    entity: sensor.pro_3em_eg_total_active_power
+    icon: mdi:floor-plan
+    icon_color: "#ffe39a"
+    ring: "#ffd166"
+    fill: "#2b2614"
+    shape: rounded
+    row: 2.5
+    col: 4
+  - id: floor_og
+    label: OG
+    entity: sensor.pro3em_og_total_active_power
+    icon: mdi:floor-plan
+    icon_color: "#ffe39a"
+    ring: "#ffd166"
+    fill: "#2b2614"
+    shape: rounded
+    row: 3.5
+    col: 4
+links:
+  - from: pv1
+    to: batt
+    color: "#7cffcb"
+    width: 2
+    speed: 0.9
+    zero_threshold: 0
+  - from: pv2
+    to: batt
+    color: "#7cffcb"
+    width: 2
+    speed: 0.9
+    zero_threshold: 0
+  - from: pv3
+    to: batt
+    color: "#7cffcb"
+    width: 2
+    speed: 0.9
+    zero_threshold: 0
+  - from: pv4
+    to: batt
+    color: "#7cffcb"
+    width: 2
+    speed: 0.9
+    zero_threshold: 0
+  - from: netz
+    to: home
+    color: "#8800ff"
+    width: 2
+    speed: 0.85
+    zero_threshold: 0
+    curve: 0.5
+  - from: home
+    to: netz
+    color: "#23b0ff"
+    width: 2
+    speed: 0.3
+    zero_threshold: 0
+    curve: 0.5
+  - from: batt
+    to: home
+    color: "#ff6b6b"
+    width: 2
+    speed: 0.2
+    zero_threshold: 0
+    curve: 0
+  - from: home
+    to: floor_kg
+    color: "#ffd166"
+    width: 2
+    speed: 0.8
+    zero_threshold: 0
+  - from: home
+    to: floor_eg
+    color: "#ffd166"
+    width: 2
+    speed: 0.8
+    zero_threshold: 0
+  - from: home
+    to: floor_og
+    color: "#ffd166"
+    width: 2
+    speed: 0.8
+    zero_threshold: 0
