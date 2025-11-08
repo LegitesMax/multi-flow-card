@@ -640,7 +640,7 @@ class FlowNetworkCard extends HTMLElement {
       const dt = this._lastTs ? (ts - this._lastTs) : 16;
       this._lastTs = ts;
       if (this._needsBgRedraw) { this._drawBg(); this._needsBgRedraw = false; }
-      this._updateLinkDirections();
+      //this._updateLinkDirections();
       this._drawDots(dt);
     };
     this._raf = requestAnimationFrame(step);
