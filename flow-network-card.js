@@ -1,11 +1,9 @@
 // flow-network-card.js
-// Flow Network Card – responsive grid, IN/OUT values per node, correct W→kW conversion,
-// default flow_entity = from-node.entity, smooth dot, rounded-edge link attachment,
-// auto text fit, first-render fix, fan-out for parallel links.
+// Flow Network Card – responsive grid, IN/OUT optional, leere Werte ausblenden,
+// suffix-gesteuerte W↔kW-Anzeige, auto-height nach Textinhalt.
 
 class FlowNetworkCard extends HTMLElement {
   static getConfigElement(){ return null; } // YAML-only
-
   static getStubConfig() {
     return {
       background: "#14171a",
@@ -97,7 +95,6 @@ class FlowNetworkCard extends HTMLElement {
     this._resize();
     this._updateLinkDirections();
 
-    // First-render fix (wenn Card erst unsichtbar gemountet wird)
     if (!this._initializedFix) {
       this._initializedFix = true;
       setTimeout(() => {
@@ -141,21 +138,21 @@ class FlowNetworkCard extends HTMLElement {
         id: String(n.id || `n${i}`),
         label: n.label || n.id,
         entity: n.entity || "",
-        // NEU: pro Node zwei Zeilen (IN/OUT) – Fallback auf entity
+        // IN/OUT Labels standardmäßig leer -> nur anzeigen, wenn explizit gesetzt
         in_entity:  n.in_entity  || null,
         out_entity: n.out_entity || null,
-        in_label:   n.in_label   || "IN",
-        out_label:  n.out_label  || "OUT",
+        in_label:   (n.in_label   ?? ""),   // vorher "IN"
+        out_label:  (n.out_label  ?? ""),   // vorher "OUT"
 
         shape: (n.shape || "rounded").toLowerCase(),
-        size: sizeSpecified ? Math.max(56, Number(n.size)) : null, // auto wenn null
+        size: sizeSpecified ? Math.max(56, Number(n.size)) : null,
         ring: n.ring || "#23b0ff", fill: n.fill || "#121418",
         ringWidth: Math.max(2, Number(n.ringWidth || 3)),
         text_color: n.color || this._config.node_text_color,
-        fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null, // auto wenn null
+        fontSize: fontSpecified ? Math.max(11, Number(n.fontSize)) : null,
         order: n.order ?? i,
         icon: n.icon || null,
-        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null, // auto wenn null
+        icon_size: iconSpecified ? Math.max(14, Number(n.icon_size)) : null,
         icon_color: n.icon_color || "#ffffff",
         row: (row !== undefined && row !== null) ? Number(row) : null,
         col: Number.isFinite(col) ? Math.max(1, Math.floor(col)) : null,
@@ -166,7 +163,6 @@ class FlowNetworkCard extends HTMLElement {
 
     this._nodeMap = new Map(this._nodes.map(n => [n.id, n]));
 
-    // Links: flow_entity default = FROM-Node.entity (falls nicht explizit gesetzt)
     this._links = (this._config.links || [])
       .map(l => {
         const fromId = String(l.from || "");
@@ -299,7 +295,6 @@ class FlowNetworkCard extends HTMLElement {
     const baseFont = Math.round(Math.max(12, Math.min(18, nodeSize * 0.18)));
     if (n._auto.font) n.fontSize = baseFont;
 
-    // Soft-Fit: misst Textbreiten und reduziert Font behutsam (min 11px)
     const ctx = this.bgCtx;
     ctx.save();
     ctx.font = `bold ${n.fontSize || baseFont}px ${this._config.font_family}`;
@@ -332,20 +327,23 @@ class FlowNetworkCard extends HTMLElement {
     return Number.isFinite(num) ? num : NaN;
   }
 
-  // Globale Anzeige-Umrechnung (z. B. W → kW)
+  // Suffix-gesteuerte Anzeige (W/kW) + Fallback unit_mode
   _applyGlobalUnit(val, unitDefault) {
     const cmp = this._config.compute || {};
-    const mode = (cmp.unit_mode || "keep").toLowerCase();
     const precOverride = Number.isFinite(cmp.precision) ? Number(cmp.precision) : null;
+    const suf = typeof cmp.suffix === "string" ? cmp.suffix.trim() : null;
+
     let unit = unitDefault || "";
     let out = val;
 
-    if (mode === "w_to_kw") {
-      out = val * 0.001;
-      unit = " kW";
-    }
-    if (typeof cmp.suffix === "string" && cmp.suffix.length) {
-      unit = " " + cmp.suffix;
+    if (suf === "kW") {
+      out = val * 0.001; unit = " kW";
+    } else if (suf === "W") {
+      out = val; unit = " W";
+    } else {
+      const mode = (cmp.unit_mode || "keep").toLowerCase();
+      if (mode === "w_to_kw") { out = val * 0.001; unit = " kW"; }
+      // else keep: benutze entity unit
     }
     return { out, unit, precOverride };
   }
@@ -370,7 +368,6 @@ class FlowNetworkCard extends HTMLElement {
     return label ? `${label} ${v}` : v;
   }
 
-  // setzt je Link die Richtung anhand des flow_entity-Wertes
   _updateLinkDirections() {
     if (!this._links) return;
     const missing = (this._config.missing_behavior || "stop");
@@ -467,7 +464,7 @@ class FlowNetworkCard extends HTMLElement {
 
   // ---------- labels & drawing ----------
   _computeLabelSides() {
-    const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));
+    const sum = new Map(this._nodes.map(n => [n.id, {dx:0, dy:0, c:0}]));    
     for (const l of this._links) {
       const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
       if (!a || !b) continue;
@@ -495,7 +492,7 @@ class FlowNetworkCard extends HTMLElement {
 
     this._fanCache = null;
 
-    // Linien zeichnen
+    // Links
     for (const l of this._links) {
       const a = this._nodeMap.get(l.from), b = this._nodeMap.get(l.to);
       if (!a || !b) continue;
@@ -524,10 +521,7 @@ class FlowNetworkCard extends HTMLElement {
               return (bx?bx._px.y:0) - (by?by._px.y:0);
             });
           const n = group.length;
-          group.forEach((g, idx)=>{
-            const rel = (idx - (n-1)/2);
-            this._fanCache.set(`${a.id}->${(g.to||'')}:${(g.from||'')}`, rel);
-          });
+          group.forEach((g, idx)=>{ const rel = (idx - (n-1)/2); this._fanCache.set(`${a.id}->${(g.to||'')}:${(g.from||'')}`, rel); });
         }
         const rel = this._fanCache.get(`${a.id}->${(l.to||'')}:${(l.from||'')}`) ?? 0;
         const strength = Number(this._config.link_fan_out.strength ?? 0.10);
@@ -549,8 +543,11 @@ class FlowNetworkCard extends HTMLElement {
 
     this._computeLabelSides();
 
-    // Nodes zeichnen
+    // Nodes
     for (const n of this._nodes) this._drawNode(ctx, n);
+
+    // Nach dem Zeichnen: echte Inhaltshöhe ermitteln und Wrapper ggf. anpassen
+    this._ensureAutoHeight();
   }
 
   _drawNode(ctx, n) {
@@ -617,6 +614,46 @@ class FlowNetworkCard extends HTMLElement {
     ctx.closePath();
   }
 
+  // ---------- auto-height je Inhalt ----------
+  _estimateBounds() {
+    const padY = Number(this._config.layout?.padding_y ?? 16);
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (const n of this._nodes) {
+      const p = n._px, r = n.size/2;
+      const fs = Math.max(11, n.fontSize || 14);
+      const iconH = n.icon ? (n.icon_size || 24) : 0;
+      const extra = Math.max(6, this._config.value_offset_px || 8, Math.round(n.size * 0.06));
+      const line1 = this._composeLine(n, n.in_entity || n.entity, n.in_label);
+      const line2 = this._composeLine(n, n.out_entity || n.entity, n.out_label);
+      const lines = (line1?1:0) + (line2?1:0);
+
+      // Oberer Rand inkl. Top-Label (falls oben)
+      const top = p.y - r - (n._labelSide === "top" ? (8 + fs) : 0);
+      // Unterer Rand inkl. Bottom-Label (falls unten) und Werte-Zeilen
+      const valuesH = lines ? (lines === 2 ? fs*2 + 4 : fs) : 0;
+      const bottom = p.y + r + (n._labelSide === "bottom" ? (8 + fs) : 0) + iconH/2 + extra + valuesH;
+
+      if (top < minY) minY = top;
+      if (bottom > maxY) maxY = bottom;
+    }
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return null;
+    return { top: minY - padY, bottom: maxY + padY, height: (maxY - minY) + padY*2 };
+  }
+
+  _ensureAutoHeight() {
+    if (!this._config.layout?.auto_height) return;
+    const b = this._estimateBounds();
+    if (!b) return;
+    const current = this.wrapper.getBoundingClientRect().height;
+    const target = Math.ceil(b.height);
+    if (Math.abs(current - target) > 1) {
+      this.wrapper.style.height = `${target}px`;
+      this._resize(); // Canvas-Größe nachziehen
+    }
+  }
+
   // ---------- dots layer ----------
   _drawDots(dtMs) {
     const ctx = this.fgCtx;
@@ -642,8 +679,8 @@ class FlowNetworkCard extends HTMLElement {
       else if (tPrime > 1 - fadeZone) alpha = (1 - tPrime) / fadeZone;
 
       ctx.save();
-      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
       if (this._config.dot.glow) { ctx.shadowColor = l.color; ctx.shadowBlur = 8; }
+      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
       ctx.fillStyle = l.color;
       const r = Math.max(3, this._config.dot.size || 5);
       ctx.beginPath(); ctx.arc(pos.x, pos.y, r, 0, Math.PI*2); ctx.fill();
@@ -677,7 +714,7 @@ customElements.define("flow-network-card", FlowNetworkCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "flow-network-card",
-  name: "Flow Network Card (IN/OUT + Global Units)",
-  description: "Two-line values per node (in/out), responsive grid, correct W→kW conversion, smooth dot flow.",
+  name: "Flow Network Card (Suffix W/kW, Auto-Height)",
+  description: "Optionale IN/OUT-Labels, leere Werte ausblenden, W↔kW per Suffix, dynamische Höhe.",
   preview: true
 });
