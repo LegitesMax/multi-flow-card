@@ -1,6 +1,10 @@
 // flow-network-card.js
 // Flow Network Card – responsive, auto-size, half-row support
 // NEU:
+// - Pro Node zwei Endpunkte: input/output (optional). Jeweils entity + optional icon, color, derive.
+// - Anzeige mittig im Node; 1 oder 2 Zeilen abhängig von gesetzten Endpunkten.
+// - Rückwärtskompatibel: ohne input/output bleibt das alte Verhalten (Single-Entity).
+//
 // - Pro Node nur einfache Arithmetik: add / subtract (Zahl, Entity-ID oder Liste)
 // - Globale Einheiten-Umrechnung (compute.unit_mode): keep | w_to_kw
 // - flow_entity default = FROM-Node.entity (wenn nicht explizit gesetzt)
@@ -143,10 +147,18 @@ class FlowNetworkCard extends HTMLElement {
       const fontSpecified = Number.isFinite(n.fontSize);
 
       return {
-        id: String(n.id || `n${i}`),
+        
+// --- input/output endpoints (optional) ---
+input: n.input ? (typeof n.input === "string" ? { entity: n.input } : n.input) : null,
+output: n.output ? (typeof n.output === "string" ? { entity: n.output } : n.output) : null,
+id: String(n.id || `n${i}`),
         label: n.label || n.id,
         entity: n.entity || "",
-        // NEU: einfache Arithmetik
+        // NEU:
+// - Pro Node zwei Endpunkte: input/output (optional). Jeweils entity + optional icon, color, derive.
+// - Anzeige mittig im Node; 1 oder 2 Zeilen abhängig von gesetzten Endpunkten.
+// - Rückwärtskompatibel: ohne input/output bleibt das alte Verhalten (Single-Entity).
+// einfache Arithmetik
         add: n.add ?? null,         // Zahl | string(entity) | [ .. ]
         subtract: n.subtract ?? null,
 
@@ -309,7 +321,30 @@ class FlowNetworkCard extends HTMLElement {
     return isNaN(num) ? NaN : num;
     }
 
-  // einfache Arithmetik: add/subtract
+  
+
+// Read endpoint (input/output) with optional derive and global unit handling
+_readEndpointValue(endpoint) {
+  if (!endpoint || !endpoint.entity) return { raw: null, text: "" };
+  const st = this._getState(endpoint.entity);
+  if (!st) return { raw: null, text: "" };
+  const rawNum = Number(st.state);
+  if (isNaN(rawNum)) return { raw: st.state, text: String(st.state) };
+
+  let v = rawNum;
+  const d = endpoint.derive;
+  if (d === 'grid_import' || d === 'positive' || d === true) {
+    v = Math.max(0, v);
+  } else if (d === 'grid_export' || d === 'negative') {
+    v = Math.max(0, -v);
+  }
+
+  const unitDefault = st.attributes.unit_of_measurement ? (" " + st.attributes.unit_of_measurement) : "";
+  const g = this._applyGlobalUnit(v, unitDefault);
+  const precision = (g.precOverride != null) ? g.precOverride : (this._config.value_precision ?? 2);
+  return { raw: v, text: Number(v).toFixed(precision) + g.unit };
+}
+// einfache Arithmetik: add/subtract
   _resolveTerm(t) {
     if (Array.isArray(t)) return t.map(x=>this._resolveTerm(x)).reduce((a,b)=>a+(Number.isFinite(b)?b:0),0);
     if (typeof t === "number") return t;
@@ -367,19 +402,26 @@ class FlowNetworkCard extends HTMLElement {
     // non-numeric
     return { raw: st.state, text: String(st.state) };
   }
+
+  _readNumber(entityId) {
+    const st = this._getState(entityId);
+    const num = Number(st?.state);
+    return isNaN(num) ? NaN : num;
+  }
+
   _updateLinkDirections() {
     if (!this._links) return;
     const missing = (this._config.missing_behavior || "stop");
     for (const l of this._links) {
       if (l.flow_entity) {
-        const v = this._getNumber(l.flow_entity);
+        const v = this._readNumber(l.flow_entity);
         if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0)) { l._dir = 0; continue; }
         l._dir = v > 0 ? 1 : -1;
       } else if (missing === "stop") {
         l._dir = 0;
       } else {
         const fromNode = this._nodeMap.get(l.from);
-        const v = fromNode?.entity ? this._getNumber(fromNode.entity) : NaN;
+        const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
         l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0)) ? 1 : 0;
       }
     }
@@ -561,7 +603,51 @@ class FlowNetworkCard extends HTMLElement {
     const baseline = above ? "bottom" : "top";
     ctx.save(); ctx.textAlign = "center"; ctx.textBaseline = baseline; ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
-    ctx.fillText(n.label, p.x, labelY); ctx.restore();
+    
+
+// --- NEW: endpoint-centered rendering (input/output) ---
+try {
+  const hasIn  = !!(n.input  && n.input.entity);
+  const hasOut = !!(n.output && n.output.entity);
+  if (hasIn || hasOut) {
+    const centerX = n._px.x;
+    const centerY = n._px.y;
+    const lineGap = Math.max(12, Math.round(n.size * 0.14));
+    const fontPx  = n.fontSize || Math.max(12, Math.min(18, Math.round(n.size * 0.18)));
+    const lines = [];
+    if (hasIn)  { const v = this._readEndpointValue(n.input);  lines.push({ kind: "in",  text: v.text,  icon: n.input.icon  || null, color: n.input.color  || n.text_color }); }
+    if (hasOut) { const v = this._readEndpointValue(n.output); lines.push({ kind: "out", text: v.text,  icon: n.output.icon || null, color: n.output.color || n.text_color }); }
+
+    const offsets = (lines.length === 1) ? [0] : [-Math.floor(lineGap/2), Math.floor(lineGap/2)];
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `${fontPx}px ${this._config.font_family || "Inter, system-ui, sans-serif"}`;
+
+    lines.forEach((ln, i) => {
+      const y = centerY + offsets[i];
+
+      // Optional icon via iconLayer
+      if (!this._iconEls) this._iconEls = new Map();
+      if (ln.icon) {
+        const key = `${n.id}:${ln.kind}`;
+        const iconEl = this._ensureIconEl(key, ln.icon, ln.color || "#ffffff", fontPx + 4);
+        iconEl.style.left = `${centerX - Math.round(fontPx*0.7)}px`;
+        iconEl.style.top  = `${y}px`;
+        iconEl.style.display = "";
+      }
+      const xText = ln.icon ? (centerX + Math.round(fontPx * 0.4)) : centerX;
+      ctx.fillStyle = ln.color || n.text_color || "#ffffff";
+      ctx.fillText(ln.text, xText, y);
+    });
+    ctx.restore();
+
+    // Skip default single-value rendering
+    return;
+  }
+} catch (e) { /* fail-safe: fall back to default rendering */ }
+ctx.fillText(n.label, p.x, labelY); ctx.restore();
 
     // Wert (nach add/subtract + globale Umrechnung)
     const v = this._readEntityValue(n);
@@ -576,6 +662,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = n.text_color;
+    const globalPrec = (this._config.compute?.precision != null) ? this._config.compute.precision : (this._config.value_precision ?? 2);
     ctx.font = `bold ${Math.max(12, n.fontSize || 14)}px ${this._config.font_family}`;
     // v.text ist bereits formatiert; wir nutzen es direkt:
     ctx.fillText(v.text, p.x, valueY);
