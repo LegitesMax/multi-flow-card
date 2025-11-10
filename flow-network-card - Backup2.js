@@ -367,19 +367,26 @@ class FlowNetworkCard extends HTMLElement {
     // non-numeric
     return { raw: st.state, text: String(st.state) };
   }
+
+  _readNumber(entityId) {
+    const st = this._getState(entityId);
+    const num = Number(st?.state);
+    return isNaN(num) ? NaN : num;
+  }
+
   _updateLinkDirections() {
     if (!this._links) return;
     const missing = (this._config.missing_behavior || "stop");
     for (const l of this._links) {
       if (l.flow_entity) {
-        const v = this._getNumber(l.flow_entity);
+        const v = this._readNumber(l.flow_entity);
         if (isNaN(v) || Math.abs(v) <= (l.zero_threshold ?? 0)) { l._dir = 0; continue; }
         l._dir = v > 0 ? 1 : -1;
       } else if (missing === "stop") {
         l._dir = 0;
       } else {
         const fromNode = this._nodeMap.get(l.from);
-        const v = fromNode?.entity ? this._getNumber(fromNode.entity) : NaN;
+        const v = fromNode?.entity ? this._readNumber(fromNode.entity) : NaN;
         l._dir = (!isNaN(v) && Math.abs(v) > (l.zero_threshold ?? 0)) ? 1 : 0;
       }
     }
@@ -576,6 +583,7 @@ class FlowNetworkCard extends HTMLElement {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = n.text_color;
+    const globalPrec = (this._config.compute?.precision != null) ? this._config.compute.precision : (this._config.value_precision ?? 2);
     ctx.font = `bold ${Math.max(12, n.fontSize || 14)}px ${this._config.font_family}`;
     // v.text ist bereits formatiert; wir nutzen es direkt:
     ctx.fillText(v.text, p.x, valueY);
