@@ -615,9 +615,9 @@ _readEndpointValue(endpoint) {
         const cy = n._px.y;
 
         const fontPx  = n.fontSize || Math.max(12, Math.min(18, Math.round(n.size * 0.18)));
-        const iconPx  = fontPx + 6;
-        const gapIconText = Math.max(4, Math.round(fontPx * 0.25));
-        const gapBlocks   = Math.max(8, Math.round(fontPx * 0.5));
+        const iconPx  = fontPx + 8;
+        const gapIconText = Math.max(6, Math.round(fontPx * 0.35));
+        const gapBlocks   = Math.max(10, Math.round(fontPx * 0.6));
         const lineHeight  = Math.round(fontPx * 1.1);
 
         const blocks = [];
@@ -653,7 +653,7 @@ _readEndpointValue(endpoint) {
             el.style.display = "";
           }
 
-          const yText = yTop + iconPx + gapIconText;
+          const yText = yIconCenter + Math.ceil(iconPx/2) + gapIconText;
           ctx.fillStyle = b.color || n.text_color || "#ffffff";
           ctx.fillText(b.text, cx, yText);
 
