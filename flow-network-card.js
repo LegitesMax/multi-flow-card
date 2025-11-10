@@ -605,45 +605,66 @@ _readEndpointValue(endpoint) {
     ctx.font = `bold ${n.fontSize || 14}px ${this._config.font_family}`;
     
 
+
 // --- NEW: endpoint-centered rendering (input/output) ---
-try {
-  const hasIn  = !!(n.input  && n.input.entity);
-  const hasOut = !!(n.output && n.output.entity);
-  if (hasIn || hasOut) {
-    const centerX = n._px.x;
-    const centerY = n._px.y;
-    const lineGap = Math.max(12, Math.round(n.size * 0.14));
-    const fontPx  = n.fontSize || Math.max(12, Math.min(18, Math.round(n.size * 0.18)));
-    const lines = [];
-    if (hasIn)  { const v = this._readEndpointValue(n.input);  lines.push({ kind: "in",  text: v.text,  icon: n.input.icon  || null, color: n.input.color  || n.text_color }); }
-    if (hasOut) { const v = this._readEndpointValue(n.output); lines.push({ kind: "out", text: v.text,  icon: n.output.icon || null, color: n.output.color || n.text_color }); }
+    try {
+      const hasIn  = !!(n.input  && n.input.entity);
+      const hasOut = !!(n.output && n.output.entity);
+      if (hasIn || hasOut) {
+        const cx = n._px.x;
+        const cy = n._px.y;
 
-    const offsets = (lines.length === 1) ? [0] : [-Math.floor(lineGap/2), Math.floor(lineGap/2)];
+        const fontPx  = n.fontSize || Math.max(12, Math.min(18, Math.round(n.size * 0.18)));
+        const iconPx  = fontPx + 6;
+        const gapIconText = Math.max(4, Math.round(fontPx * 0.25));
+        const gapBlocks   = Math.max(8, Math.round(fontPx * 0.5));
+        const lineHeight  = Math.round(fontPx * 1.1);
 
-    ctx.save();
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = `${fontPx}px ${this._config.font_family || "Inter, system-ui, sans-serif"}`;
+        const blocks = [];
+        if (hasIn)  { const v = this._readEndpointValue(n.input);  blocks.push({ kind: "in",  text: v.text,  icon: n.input.icon  || null, color: n.input.color  || n.text_color }); }
+        if (hasOut) { const v = this._readEndpointValue(n.output); blocks.push({ kind: "out", text: v.text,  icon: n.output.icon || null, color: n.output.color || n.text_color }); }
 
-    lines.forEach((ln, i) => {
-      const y = centerY + offsets[i];
+        const blockHeights = blocks.map(() => iconPx + gapIconText + lineHeight);
+        const totalHeight = blockHeights.reduce((a,b)=>a+b, 0) + (blocks.length > 1 ? gapBlocks : 0);
+        let yTop = cy - Math.round(totalHeight/2);
 
-      // Optional icon via iconLayer
-      if (!this._iconEls) this._iconEls = new Map();
-      if (ln.icon) {
-        const key = `${n.id}:${ln.kind}`;
-        const iconEl = this._ensureIconEl(key, ln.icon, ln.color || "#ffffff", fontPx + 4);
-        iconEl.style.left = `${centerX - Math.round(fontPx*0.7)}px`;
-        iconEl.style.top  = `${y}px`;
-        iconEl.style.display = "";
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.font = `${fontPx}px ${this._config.font_family || "Inter, system-ui, sans-serif"}`;
+
+        if (!this.iconLayer) {
+          this.iconLayer = document.createElement("div");
+          Object.assign(this.iconLayer.style, { position: "absolute", inset: "0", pointerEvents: "none" });
+          this.wrapper.appendChild(this.iconLayer);
+        }
+        if (!this._iconEls) this._iconEls = new Map();
+
+        for (let i = 0; i < blocks.length; i++) {
+          const b = blocks[i];
+          const h = blockHeights[i];
+
+          const yIconCenter = yTop + Math.round(iconPx/2);
+          if (b.icon) {
+            const key = `${n.id}:${b.kind}`;
+            const el = this._ensureIconEl(key, b.icon, b.color || "#ffffff", iconPx);
+            el.style.left = `${cx}px`;
+            el.style.top  = `${yIconCenter}px`;
+            el.style.display = "";
+          }
+
+          const yText = yTop + iconPx + gapIconText;
+          ctx.fillStyle = b.color || n.text_color || "#ffffff";
+          ctx.fillText(b.text, cx, yText);
+
+          yTop += h + (i < blocks.length - 1 ? gapBlocks : 0);
+        }
+        ctx.restore();
+
+        return;
       }
-      const xText = ln.icon ? (centerX + Math.round(fontPx * 0.4)) : centerX;
-      ctx.fillStyle = ln.color || n.text_color || "#ffffff";
-      ctx.fillText(ln.text, xText, y);
-    });
-    ctx.restore();
-
-    // Skip default single-value rendering
+    } catch (e) { /* fail-safe: fall back to default rendering */ }
+// Skip default single-value rendering
     return;
   }
 } catch (e) { /* fail-safe: fall back to default rendering */ }
